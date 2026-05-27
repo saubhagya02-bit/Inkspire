@@ -1,70 +1,48 @@
-const amqplib = require("amqplib");
-const logger = require("./logger");
+const amqplib = require('amqplib');
+const logger = require('./logger');
 
 let channel;
 let connection;
-let reconnecting = false;
 
 const EXCHANGES = {
-  USER_EVENTS: "user.events",
-};
-
-const QUEUES = {
-  NOTIFICATION: "auth.notification.queue",
+  USER_EVENTS: 'user.events',
 };
 
 const connectRabbitMQ = async () => {
-  const url = process.env.RABBITMQ_URL || "amqp://guest:guest@rabbitmq:5672";
-  let retries = 5;
+  const url = process.env.RABBITMQ_URL || 'amqp://guest:guest@rabbitmq:5672';
+  
+  connection = await amqplib.connect(url);
+  channel = await connection.createChannel();
+  await channel.assertExchange(EXCHANGES.USER_EVENTS, 'topic', { durable: true });
 
-  while (retries > 0) {
-    try {
-      connection = await amqplib.connect(url);
-      channel = await connection.createChannel();
+  connection.on('error', (err) => {
+    logger.error('RabbitMQ connection error:', err.message);
+    channel = null;
+  });
 
-      await channel.assertExchange(EXCHANGES.USER_EVENTS, "topic", {
-        durable: true,
-      });
+  connection.on('close', () => {
+    logger.warn('RabbitMQ connection closed');
+    channel = null;
+  });
 
-      await channel.assertQueue(QUEUES.NOTIFICATION, { durable: true });
-      await channel.bindQueue(
-        QUEUES.NOTIFICATION,
-        EXCHANGES.USER_EVENTS,
-        "user.#",
-      );
-
-      logger.info("RabbitMQ connected (auth-service)");
-
-      connection.on("error", (err) => {
-        logger.error("RabbitMQ connection error:", err);
-        setTimeout(connectRabbitMQ, 5000);
-      });
-
-      return channel;
-    } catch (err) {
-      retries--;
-      logger.warn(`RabbitMQ connection failed, retrying... (${retries} left)`);
-      await new Promise((r) => setTimeout(r, 3000));
-    }
-  }
-  throw new Error("Failed to connect to RabbitMQ after retries");
+  return channel;
 };
 
 const publishEvent = async (routingKey, payload) => {
   try {
-    if (!channel) throw new Error("RabbitMQ channel not initialized");
+    if (!channel) {
+      logger.warn(`RabbitMQ not connected, skipping event: ${routingKey}`);
+      return; 
+    }
     channel.publish(
       EXCHANGES.USER_EVENTS,
       routingKey,
-      Buffer.from(
-        JSON.stringify({ ...payload, timestamp: new Date().toISOString() }),
-      ),
-      { persistent: true, contentType: "application/json" },
+      Buffer.from(JSON.stringify({ ...payload, timestamp: new Date().toISOString() })),
+      { persistent: true, contentType: 'application/json' }
     );
-    logger.info(`Event published: ${routingKey}`);
   } catch (err) {
-    logger.error("Failed to publish event:", err);
+    logger.error('Failed to publish event:', err.message);
   }
 };
 
-module.exports = { connectRabbitMQ, publishEvent, EXCHANGES, QUEUES };
+module.exports = { connectRabbitMQ, publishEvent, EXCHANGES };
