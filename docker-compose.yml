@@ -1,0 +1,236 @@
+version: "3.9"
+
+networks:
+  blog-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  mongo_data:
+  redis_data:
+  rabbitmq_data:
+  minio_data:
+
+services:
+
+  # =========================
+  # INFRASTRUCTURE
+  # =========================
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: blog-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-inkspire}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-inkspire_password}
+      POSTGRES_DB: ${POSTGRES_DB:-inkspire}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/docker/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - blog-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-inkspire}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongo:
+    image: mongo:7
+    container_name: blog-mongo
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "27017:27017"
+    networks:
+      - blog-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: blog-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - blog-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: blog-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - blog-net
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: blog-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      - blog-net
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: blog-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@inkspire.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    networks:
+      - blog-net
+    depends_on:
+      - postgres
+
+  # =========================
+  # MICROSERVICES
+  # =========================
+
+  api-gateway:
+    build:
+      context: ./services/api-gateway
+      dockerfile: Dockerfile
+    container_name: blog-api-gateway
+    env_file: .env
+    environment:
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    networks:
+      - blog-net
+    depends_on:
+      - postgres
+      - mongo
+      - redis
+      - rabbitmq
+    restart: unless-stopped
+
+  auth-service:
+    build:
+      context: ./services/auth-service
+    container_name: blog-auth-service
+    env_file: .env
+    environment:
+      PORT: 3001
+    ports:
+      - "3001:3001"
+    networks:
+      - blog-net
+    depends_on:
+      - postgres
+      - redis
+      - rabbitmq
+    restart: unless-stopped
+
+  post-service:
+    build:
+      context: ./services/post-service
+    container_name: blog-post-service
+    env_file: .env
+    environment:
+      PORT: 3002
+    ports:
+      - "3002:3002"
+    networks:
+      - blog-net
+    depends_on:
+      - postgres
+      - redis
+      - rabbitmq
+    restart: unless-stopped
+
+  comment-service:
+    build:
+      context: ./services/comment-service
+    container_name: blog-comment-service
+    env_file: .env
+    environment:
+      PORT: 3003
+    ports:
+      - "3003:3003"
+    networks:
+      - blog-net
+    depends_on:
+      - mongo
+      - redis
+      - rabbitmq
+    restart: unless-stopped
+
+  media-service:
+    build:
+      context: ./services/media-service
+    container_name: blog-media-service
+    env_file: .env
+    environment:
+      PORT: 3004
+    ports:
+      - "3004:3004"
+    networks:
+      - blog-net
+    depends_on:
+      - mongo
+      - rabbitmq
+    restart: unless-stopped
+
+  notification-service:
+    build:
+      context: ./services/notification-service
+    container_name: blog-notification-service
+    env_file: .env
+    environment:
+      PORT: 3005
+    ports:
+      - "3005:3005"
+    networks:
+      - blog-net
+    depends_on:
+      - mongo
+      - redis
+      - rabbitmq
+    restart: unless-stopped
+
+  #frontend:
+   # build:
+    #  context: ./frontend
+    #container_name: blog-frontend
+   # env_file: .env
+    #ports:
+      #- "5173:5173"
+    #networks:
+     # - blog-net
+    #depends_on:
+    #  - api-gateway
+    #restart: unless-stopped
