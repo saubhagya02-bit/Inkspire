@@ -293,7 +293,7 @@ const resetPassword = async (req, res) => {
 const setup2FA = async (req, res) => {
   const userId = req.user.id;
   try {
-    const secret = speakeasy.generateSecret({ name: `BlogCMS:${userId}` });
+    const secret = speakeasy.generateSecret({ name: `InkSpire:${userId}` });
 
     await pool.query(
       "UPDATE users SET two_factor_secret_pending = $1 WHERE id = $2",
