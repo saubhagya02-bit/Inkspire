@@ -84,12 +84,13 @@ const requireAuth = async (req, res, next) => {
 };
 
 // Proxy helper
-const forward = (baseUrl, pathPrefix) => async (req, res) => {
-  const suffix = req.originalUrl.startsWith(pathPrefix)
-    ? req.originalUrl.slice(pathPrefix.length) || "/"
+const forward = (baseUrl, stripPrefix) => async (req, res) => {
+  const suffix = req.originalUrl.startsWith(stripPrefix)
+    ? req.originalUrl.slice(stripPrefix.length) || "/"
     : req.originalUrl;
+
   const target = baseUrl + suffix;
-  logger.info(`Forwarding: ${req.method} ${target}`);
+  logger.info(`Forwarding: ${req.method} ${req.originalUrl} → ${target}`);
 
   try {
     const headers = {
@@ -102,6 +103,7 @@ const forward = (baseUrl, pathPrefix) => async (req, res) => {
       headers["x-user-email"] = req.user.email;
       headers["x-user-username"] = req.user.username || "";
     }
+
     const response = await axios({
       method: req.method,
       url: target,
@@ -113,9 +115,10 @@ const forward = (baseUrl, pathPrefix) => async (req, res) => {
       timeout: 10000,
       validateStatus: () => true,
     });
+
     res.status(response.status).json(response.data);
   } catch (err) {
-    logger.error("Proxy error: " + err.message);
+    logger.error("Proxy error:", err.message);
     res
       .status(502)
       .json({ error: "Service unavailable", target, detail: err.message });
@@ -140,6 +143,8 @@ app.get("/api/posts", forward(SERVICES.posts, "/api/posts"));
 app.get("/api/posts/*", forward(SERVICES.posts, "/api/posts"));
 app.all("/api/posts", requireAuth, forward(SERVICES.posts, "/api/posts"));
 app.all("/api/posts/*", requireAuth, forward(SERVICES.posts, "/api/posts"));
+
+app.get("/api/comments/*", forward(SERVICES.comments, "/api/comments"));
 
 app.all(
   "/api/comments/*",
