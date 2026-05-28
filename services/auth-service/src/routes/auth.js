@@ -3,6 +3,7 @@ const passport = require("passport");
 const { body } = require("express-validator");
 const { validate } = require("../middleware/validate");
 const {
+  generateTokens,
   register,
   login,
   refreshToken,
@@ -13,11 +14,9 @@ const {
   setup2FA,
   enable2FA,
 } = require("../controllers/authController");
-const jwt = require("jsonwebtoken");
-
 const { authenticateToken } = require("../middleware/auth");
 
-// Validation Rules
+// Validation rules
 const registerRules = [
   body("email").isEmail().normalizeEmail(),
   body("username").isAlphanumeric().isLength({ min: 3, max: 30 }),
@@ -32,7 +31,7 @@ const loginRules = [
   body("password").notEmpty(),
 ];
 
-// Auth Routes
+// Auth routes
 router.post("/register", registerRules, validate, register);
 router.post("/login", loginRules, validate, login);
 router.post("/refresh", refreshToken);
@@ -51,7 +50,7 @@ router.post(
   resetPassword,
 );
 
-// 2FA
+// 2FA routes
 router.post("/2fa/setup", authenticateToken, setup2FA);
 router.post("/2fa/enable", authenticateToken, enable2FA);
 
@@ -67,7 +66,7 @@ router.get(
     failureRedirect: "/login?error=oauth",
   }),
   (req, res) => {
-    const { accessToken, refreshToken } = generateOAuthTokens(req.user);
+    const { accessToken, refreshToken } = generateTokens(req.user);
     res.redirect(
       `${process.env.FRONTEND_URL}/auth/callback?token=${accessToken}&refresh=${refreshToken}`,
     );
@@ -86,23 +85,11 @@ router.get(
     failureRedirect: "/login?error=oauth",
   }),
   (req, res) => {
-    const { accessToken, refreshToken } = generateOAuthTokens(req.user);
+    const { accessToken, refreshToken } = generateTokens(req.user);
     res.redirect(
       `${process.env.FRONTEND_URL}/auth/callback?token=${accessToken}&refresh=${refreshToken}`,
     );
   },
 );
-
-function generateOAuthTokens(user) {
-  const payload = { id: user.id, email: user.email, role: user.role };
-  return {
-    accessToken: jwt.sign(payload, process.env.JWT_SECRET, {
-      expiresIn: "15m",
-    }),
-    refreshToken: jwt.sign(payload, process.env.JWT_REFRESH_SECRET, {
-      expiresIn: "7d",
-    }),
-  };
-}
 
 module.exports = router;
