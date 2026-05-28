@@ -1,4 +1,4 @@
-# Stage 1: install dependencies 
+# Stage 1: install dependencies
 FROM node:20-alpine AS deps
 
 WORKDIR /app
@@ -20,9 +20,9 @@ COPY --chown=nodejs:nodejs . .
 
 USER nodejs
 
-EXPOSE 3000
+EXPOSE 3003
 
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-  CMD curl -f http://localhost:${PORT:-3000}/health || exit 1
+  CMD curl -f http://localhost:${PORT:-3003}/health || exit 1
 
 CMD ["node", "src/index.js"]
