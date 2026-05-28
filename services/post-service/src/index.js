@@ -31,7 +31,7 @@ app.get("/health", (req, res) => {
 });
 
 // Routes
-app.use("/posts", postRoutes);
+app.use("/", postRoutes);
 app.use("/categories", categoryRoutes);
 app.use("/tags", tagRoutes);
 
