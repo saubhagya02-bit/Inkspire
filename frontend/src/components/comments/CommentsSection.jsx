@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { commentsApi } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
 import { formatDistanceToNow } from "date-fns";
@@ -8,6 +8,116 @@ import toast from "react-hot-toast";
 const REACTIONS = ["👍", "❤️", "😂", "😢", "😡"];
 const REACTION_TYPES = ["like", "love", "laugh", "sad", "angry"];
 
+// Inline confirm dialog
+function ConfirmPopover({ message, onConfirm, onCancel }) {
+  const ref = useRef(null);
+
+  // Close on outside click
+  useEffect(() => {
+    const handler = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) onCancel();
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [onCancel]);
+
+  return (
+    <div
+      ref={ref}
+      style={{
+        position: "absolute",
+        bottom: "calc(100% + 8px)",
+        right: 0,
+        background: "var(--ink-soft)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius)",
+        padding: "12px 14px",
+        minWidth: 210,
+        boxShadow: "var(--shadow-lg)",
+        zIndex: 50,
+        animation: "fadeUp 0.15s ease",
+      }}
+    >
+      {/* Arrow */}
+      <div
+        style={{
+          position: "absolute",
+          bottom: -5,
+          right: 12,
+          width: 8,
+          height: 8,
+          background: "var(--ink-soft)",
+          border: "1px solid var(--border)",
+          borderTop: "none",
+          borderLeft: "none",
+          transform: "rotate(45deg)",
+        }}
+      />
+
+      <p
+        style={{
+          fontSize: 13,
+          color: "var(--text)",
+          marginBottom: 10,
+          lineHeight: 1.4,
+        }}
+      >
+        {message}
+      </p>
+
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <button
+          onClick={onCancel}
+          style={{
+            padding: "5px 12px",
+            borderRadius: 6,
+            fontSize: 12,
+            background: "transparent",
+            color: "var(--text-secondary)",
+            border: "1px solid var(--border)",
+            cursor: "pointer",
+            fontFamily: "var(--sans)",
+            transition: "border-color 0.15s, color 0.15s",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.borderColor = "var(--text-tertiary)";
+            e.currentTarget.style.color = "var(--text)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.borderColor = "var(--border)";
+            e.currentTarget.style.color = "var(--text-secondary)";
+          }}
+        >
+          Cancel
+        </button>
+        <button
+          onClick={onConfirm}
+          style={{
+            padding: "5px 12px",
+            borderRadius: 6,
+            fontSize: 12,
+            background: "rgba(232,97,58,0.12)",
+            color: "var(--accent)",
+            border: "1px solid rgba(232,97,58,0.3)",
+            cursor: "pointer",
+            fontFamily: "var(--sans)",
+            transition: "background 0.15s",
+          }}
+          onMouseEnter={(e) =>
+            (e.currentTarget.style.background = "rgba(232,97,58,0.2)")
+          }
+          onMouseLeave={(e) =>
+            (e.currentTarget.style.background = "rgba(232,97,58,0.12)")
+          }
+        >
+          Delete
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Main CommentsSection
 export default function CommentsSection({ postId }) {
   const { user } = useAuth();
   const [comments, setComments] = useState([]);
@@ -57,8 +167,8 @@ export default function CommentsSection({ postId }) {
     }
   };
 
+  // FIX: no window.confirm — deletion is confirmed via inline popover in CommentItem
   const handleDelete = async (id) => {
-    if (!confirm("Delete this comment?")) return;
     try {
       await commentsApi.delete(id);
       await fetchComments();
@@ -228,16 +338,46 @@ export default function CommentsSection({ postId }) {
   );
 }
 
+// CommentItem
 function CommentItem({ comment, user, onReply, onDelete, onReact, depth = 0 }) {
   const [showReactions, setShowReactions] = useState(false);
-  if (comment.isDeleted && comment.replies?.length === 0) return null;
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const reactionsRef = useRef(null);
+
+  // Close reaction picker on outside click
+  useEffect(() => {
+    if (!showReactions) return;
+    const handler = (e) => {
+      if (reactionsRef.current && !reactionsRef.current.contains(e.target))
+        setShowReactions(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showReactions]);
+
+  if (comment.isDeleted && (!comment.replies || comment.replies.length === 0))
+    return null;
+
+  const handleConfirmDelete = async () => {
+    setShowConfirm(false);
+    setDeleting(true);
+    await onDelete(comment._id);
+    setDeleting(false);
+  };
 
   return (
-    <div style={{ marginLeft: depth > 0 ? "2rem" : 0 }}>
+    <div
+      style={{
+        marginLeft: depth > 0 ? "2rem" : 0,
+        opacity: deleting ? 0.4 : 1,
+        transition: "opacity 0.2s",
+      }}
+    >
       <div
         style={{
           background: depth > 0 ? "transparent" : "var(--ink-soft)",
-          border: `1px solid ${depth > 0 ? "var(--border-soft)" : "var(--border-soft)"}`,
+          border: "1px solid var(--border-soft)",
           borderRadius: "var(--radius)",
           padding: "0.875rem 1rem",
           borderLeft:
@@ -266,6 +406,7 @@ function CommentItem({ comment, user, onReply, onDelete, onReact, depth = 0 }) {
               alignItems: "center",
               justifyContent: "center",
               fontSize: 11,
+              fontWeight: 600,
               color: "var(--text-secondary)",
               flexShrink: 0,
             }}
@@ -310,9 +451,9 @@ function CommentItem({ comment, user, onReply, onDelete, onReact, depth = 0 }) {
             }}
           >
             {/* Reaction picker */}
-            <div style={{ position: "relative" }}>
+            <div ref={reactionsRef} style={{ position: "relative" }}>
               <button
-                onClick={() => setShowReactions(!showReactions)}
+                onClick={() => setShowReactions((v) => !v)}
                 style={{
                   background: "none",
                   color: "var(--text-tertiary)",
@@ -320,7 +461,17 @@ function CommentItem({ comment, user, onReply, onDelete, onReact, depth = 0 }) {
                   display: "flex",
                   alignItems: "center",
                   gap: 4,
+                  cursor: "pointer",
+                  border: "none",
+                  fontFamily: "var(--sans)",
+                  transition: "color 0.15s",
                 }}
+                onMouseEnter={(e) =>
+                  (e.currentTarget.style.color = "var(--text-secondary)")
+                }
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.color = "var(--text-tertiary)")
+                }
               >
                 <svg
                   width="13"
@@ -347,6 +498,7 @@ function CommentItem({ comment, user, onReply, onDelete, onReact, depth = 0 }) {
                   </span>
                 )}
               </button>
+
               {showReactions && (
                 <div
                   style={{
@@ -361,6 +513,7 @@ function CommentItem({ comment, user, onReply, onDelete, onReact, depth = 0 }) {
                     gap: 4,
                     boxShadow: "var(--shadow)",
                     animation: "fadeUp 0.15s ease",
+                    zIndex: 20,
                   }}
                 >
                   {REACTIONS.map((emoji, i) => (
@@ -372,16 +525,19 @@ function CommentItem({ comment, user, onReply, onDelete, onReact, depth = 0 }) {
                       }}
                       style={{
                         background: "none",
+                        border: "none",
                         fontSize: 18,
                         borderRadius: 6,
                         padding: "2px 4px",
+                        cursor: "pointer",
                         transition: "transform 0.1s",
+                        lineHeight: 1,
                       }}
                       onMouseEnter={(e) =>
-                        (e.target.style.transform = "scale(1.3)")
+                        (e.currentTarget.style.transform = "scale(1.3)")
                       }
                       onMouseLeave={(e) =>
-                        (e.target.style.transform = "scale(1)")
+                        (e.currentTarget.style.transform = "scale(1)")
                       }
                     >
                       {emoji}
@@ -410,39 +566,61 @@ function CommentItem({ comment, user, onReply, onDelete, onReact, depth = 0 }) {
                 onClick={() => onReply(comment._id)}
                 style={{
                   background: "none",
+                  border: "none",
                   color: "var(--text-tertiary)",
                   fontSize: 13,
                   marginLeft: 4,
+                  cursor: "pointer",
+                  fontFamily: "var(--sans)",
+                  transition: "color 0.15s",
                 }}
                 onMouseEnter={(e) =>
-                  (e.target.style.color = "var(--text-secondary)")
+                  (e.currentTarget.style.color = "var(--text-secondary)")
                 }
                 onMouseLeave={(e) =>
-                  (e.target.style.color = "var(--text-tertiary)")
+                  (e.currentTarget.style.color = "var(--text-tertiary)")
                 }
               >
                 Reply
               </button>
             )}
 
-            {/* Delete (own comment or admin) */}
             {user &&
               (user.id === comment.authorId || user.role === "admin") && (
-                <button
-                  onClick={() => onDelete(comment._id)}
-                  style={{
-                    background: "none",
-                    color: "var(--text-tertiary)",
-                    fontSize: 13,
-                    marginLeft: "auto",
-                  }}
-                  onMouseEnter={(e) => (e.target.style.color = "var(--accent)")}
-                  onMouseLeave={(e) =>
-                    (e.target.style.color = "var(--text-tertiary)")
-                  }
-                >
-                  Delete
-                </button>
+                <div style={{ marginLeft: "auto", position: "relative" }}>
+                  <button
+                    onClick={() => setShowConfirm((v) => !v)}
+                    disabled={deleting}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: showConfirm
+                        ? "var(--accent)"
+                        : "var(--text-tertiary)",
+                      fontSize: 13,
+                      cursor: deleting ? "not-allowed" : "pointer",
+                      fontFamily: "var(--sans)",
+                      transition: "color 0.15s",
+                    }}
+                    onMouseEnter={(e) =>
+                      (e.currentTarget.style.color = "var(--accent)")
+                    }
+                    onMouseLeave={(e) => {
+                      if (!showConfirm)
+                        e.currentTarget.style.color = "var(--text-tertiary)";
+                    }}
+                  >
+                    {deleting ? "Deleting…" : "Delete"}
+                  </button>
+
+                  {showConfirm && (
+                    <ConfirmPopover
+                      message="Delete this comment? This can't be undone."
+                      onConfirm={handleConfirmDelete}
+                      onCancel={() => setShowConfirm(false)}
+                    />
+                  )}
+                </div>
               )}
           </div>
         )}

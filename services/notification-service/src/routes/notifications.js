@@ -8,14 +8,12 @@ const {
   getUnreadCount,
 } = require("../controllers/notificationController");
 
-// list + stats
+// Literal routes FIRST
 router.get("/", getNotifications);
 router.get("/unread-count", getUnreadCount);
-
-// bulk actions
 router.patch("/read-all", markAllRead);
 
-// single item actions
+// Parameterised routes AFTER
 router.patch("/:id/read", markRead);
 router.delete("/:id", deleteNotification);
 

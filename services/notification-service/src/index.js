@@ -18,6 +18,7 @@ app.use(cors());
 app.use(morgan("combined"));
 app.use(express.json());
 
+// Health
 app.get("/health", (req, res) =>
   res.json({
     status: "ok",
@@ -26,38 +27,40 @@ app.get("/health", (req, res) =>
   }),
 );
 
+// Routes
 app.use("/", notificationRoutes);
 
+// Error handler
 app.use((err, req, res, next) => {
   logger.error("Notification service error:", err);
-  res
-    .status(err.status || 500)
-    .json({ error: err.message || "Internal server error" });
+  res.status(err.status || 500).json({
+    error: err.message || "Internal server error",
+  });
 });
 
-// Startup with retry loop
+// Startup with retry loops
 (async () => {
-  // MongoDB
-  let mongoConnected = false;
-  while (!mongoConnected) {
+  // MongoDB — retry until ready
+  let mongoOk = false;
+  while (!mongoOk) {
     try {
       await mongoose.connect(
         process.env.MONGO_URI || "mongodb://mongo:27017/inkspire_notifications",
       );
       logger.info("MongoDB connected (notification-service)");
-      mongoConnected = true;
+      mongoOk = true;
     } catch (err) {
       logger.error("MongoDB failed, retrying in 3s...", err.message);
       await new Promise((r) => setTimeout(r, 3000));
     }
   }
 
-  // Redis
-  let redisConnected = false;
-  while (!redisConnected) {
+  // Redis — retry until ready
+  let redisOk = false;
+  while (!redisOk) {
     try {
       await connectRedis();
-      redisConnected = true;
+      redisOk = true;
     } catch (err) {
       logger.error("Redis failed, retrying in 3s...", err.message);
       await new Promise((r) => setTimeout(r, 3000));

@@ -15,7 +15,9 @@ const {
 const { validate } = require("../middleware/validate");
 const { authenticateToken } = require("../middleware/auth");
 
-// Validation rule sets
+// Validation
+
+// CREATE — title and content required
 const createRules = [
   body("title")
     .notEmpty()
@@ -30,16 +32,13 @@ const createRules = [
 ];
 
 const updateRules = [
-  body("title").optional().isLength({ max: 500 }).withMessage("Title too long"),
+  body("title").optional().isLength({ max: 500 }),
   body("content").optional(),
   body("status")
     .optional()
     .isIn(["draft", "published", "archived", "scheduled"]),
   body("visibility").optional().isIn(["public", "private", "members"]),
-  body("coverImageUrl")
-    .optional()
-    .isURL({ require_tld: false })
-    .withMessage("Cover image must be a valid URL"),
+  body("coverImageUrl").optional(),
 ];
 
 // Public routes
@@ -52,22 +51,32 @@ router.patch("/:id", authenticateToken, updateRules, validate, updatePost);
 router.delete("/:id", authenticateToken, deletePost);
 router.post("/:id/like", authenticateToken, likePost);
 
-// comment count sync from notification worker
+// Internal: comment count sync
 router.patch("/:id/comment-count", async (req, res) => {
   const { id } = req.params;
   const { delta } = req.body;
 
-  if (delta !== 1 && delta !== -1)
+  if (delta !== 1 && delta !== -1) {
     return res.status(400).json({ error: "delta must be 1 or -1" });
+  }
 
   try {
-    await pool.query(
-      "UPDATE posts SET comment_count = GREATEST(0, comment_count + $1) WHERE id = $2",
+    const result = await pool.query(
+      `UPDATE posts
+         SET comment_count = GREATEST(0, comment_count + $1),
+             updated_at    = NOW()
+       WHERE id = $2
+       RETURNING comment_count`,
       [delta, id],
     );
-    res.json({ ok: true });
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: "Post not found" });
+    }
+
+    res.json({ ok: true, comment_count: result.rows[0].comment_count });
   } catch (err) {
-    logger.error("Comment count update error:", err);
+    logger.error("comment-count update error:", err);
     res.status(500).json({ error: "Failed to update comment count" });
   }
 });
