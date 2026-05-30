@@ -11,8 +11,7 @@ const DOMPurify = createDOMPurify(window);
 const CACHE_TTL = 60;
 const MAX_REPLIES_PREVIEW = 5;
 
-// Cache invalidation helper
-
+// Cache invalidation
 const invalidatePostCommentCache = async (postId) => {
   try {
     const redis = getRedis();
@@ -36,7 +35,6 @@ const invalidatePostCommentCache = async (postId) => {
 // CREATE COMMENT
 const createComment = async (req, res) => {
   const authorId = req.headers["x-user-id"];
-
   const authorUsername =
     req.headers["x-user-username"] ||
     req.headers["x-user-email"]?.split("@")[0] ||
@@ -50,7 +48,6 @@ const createComment = async (req, res) => {
       const parent = await Comment.findById(parentId);
       if (!parent)
         return res.status(404).json({ error: "Parent comment not found" });
-
       if (parent.depth >= 2)
         return res.status(400).json({ error: "Maximum nesting depth reached" });
       depth = parent.depth + 1;
@@ -77,7 +74,11 @@ const createComment = async (req, res) => {
       authorId,
       authorUsername,
       content,
+
+      postOwnerId: req.headers["x-post-owner-id"] || null,
     });
+
+    await publishEvent("comment.count.increment", { postId });
 
     res.status(201).json(comment);
   } catch (err) {
@@ -117,17 +118,8 @@ const getComments = async (req, res) => {
     const replies = await Comment.aggregate([
       { $match: { parentId: { $in: commentIds }, isApproved: true } },
       { $sort: { createdAt: 1 } },
-      {
-        $group: {
-          _id: "$parentId",
-          replies: { $push: "$$ROOT" },
-        },
-      },
-      {
-        $project: {
-          replies: { $slice: ["$replies", MAX_REPLIES_PREVIEW] },
-        },
-      },
+      { $group: { _id: "$parentId", replies: { $push: "$$ROOT" } } },
+      { $project: { replies: { $slice: ["$replies", MAX_REPLIES_PREVIEW] } } },
     ]);
 
     const replyMap = replies.reduce((acc, r) => {
@@ -194,18 +186,26 @@ const deleteComment = async (req, res) => {
   try {
     const comment = await Comment.findById(id);
     if (!comment) return res.status(404).json({ error: "Comment not found" });
+
     if (
       comment.authorId !== authorId &&
       !["admin", "editor"].includes(userRole)
-    ) {
+    )
       return res.status(403).json({ error: "Not authorized" });
-    }
 
     comment.isDeleted = true;
     comment.deletedAt = new Date();
     comment.content = "[deleted]";
     comment.contentHtml = "<em>[deleted]</em>";
     await comment.save();
+
+    if (comment.parentId) {
+      await Comment.findByIdAndUpdate(comment.parentId, {
+        $inc: { replyCount: -1 },
+      });
+    }
+
+    await publishEvent("comment.count.decrement", { postId: comment.postId });
 
     await invalidatePostCommentCache(comment.postId);
     res.json({ message: "Comment deleted" });
@@ -216,16 +216,15 @@ const deleteComment = async (req, res) => {
 };
 
 // REACT TO COMMENT
+
 const reactToComment = async (req, res) => {
   const userId = req.headers["x-user-id"];
   const { id } = req.params;
-
   const { type } = req.body;
 
   const allowed = ["like", "love", "laugh", "sad", "angry"];
-  if (!type || !allowed.includes(type)) {
+  if (!type || !allowed.includes(type))
     return res.status(400).json({ error: "Invalid reaction type" });
-  }
 
   try {
     const comment = await Comment.findById(id);
@@ -235,7 +234,6 @@ const reactToComment = async (req, res) => {
 
     if (existingReaction) {
       if (existingReaction.type === type) {
-        // Toggle off
         comment.reactions = comment.reactions.filter(
           (r) => r.userId !== userId,
         );
@@ -244,7 +242,6 @@ const reactToComment = async (req, res) => {
           (comment.reactionCounts[type] || 0) - 1,
         );
       } else {
-        // Change reaction type
         comment.reactionCounts[existingReaction.type] = Math.max(
           0,
           (comment.reactionCounts[existingReaction.type] || 0) - 1,
@@ -257,7 +254,11 @@ const reactToComment = async (req, res) => {
       comment.reactionCounts[type] = (comment.reactionCounts[type] || 0) + 1;
     }
 
+    comment.markModified("reactionCounts");
     await comment.save();
+
+    await invalidatePostCommentCache(comment.postId);
+
     res.json({ reactionCounts: comment.reactionCounts });
   } catch (err) {
     logger.error("React to comment error:", err);
