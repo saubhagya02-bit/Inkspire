@@ -16,7 +16,6 @@ const { validate } = require("../middleware/validate");
 const { authenticateToken } = require("../middleware/auth");
 
 // Validation
-
 // CREATE — title and content required
 const createRules = [
   body("title")
