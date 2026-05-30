@@ -167,7 +167,6 @@ export default function CommentsSection({ postId }) {
     }
   };
 
-  // FIX: no window.confirm — deletion is confirmed via inline popover in CommentItem
   const handleDelete = async (id) => {
     try {
       await commentsApi.delete(id);
