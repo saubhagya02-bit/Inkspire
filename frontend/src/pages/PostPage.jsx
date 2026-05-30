@@ -17,6 +17,7 @@ export default function PostPage() {
   const [loading, setLoading] = useState(true);
   const [liked, setLiked] = useState(false);
   const [likeCount, setLikeCount] = useState(0);
+  const [liking, setLiking] = useState(false);
 
   useEffect(() => {
     postsApi
@@ -24,6 +25,8 @@ export default function PostPage() {
       .then(({ data }) => {
         setPost(data);
         setLikeCount(data.like_count || 0);
+
+        setLiked(data.is_liked || false);
       })
       .catch(() => navigate("/"))
       .finally(() => setLoading(false));
@@ -34,12 +37,21 @@ export default function PostPage() {
       toast.error("Sign in to like");
       return;
     }
+    if (liking) return;
+    setLiking(true);
+
+    setLiked((prev) => !prev);
+    setLikeCount((prev) => (liked ? prev - 1 : prev + 1));
     try {
       const { data } = await postsApi.like(post.id);
       setLiked(data.liked);
       setLikeCount(data.likeCount);
     } catch {
-      toast.error("Failed");
+      setLiked((prev) => !prev);
+      setLikeCount((prev) => (liked ? prev + 1 : prev - 1));
+      toast.error("Failed to like post");
+    } finally {
+      setLiking(false);
     }
   };
 
@@ -49,8 +61,8 @@ export default function PostPage() {
       await postsApi.delete(post.id);
       toast.success("Post deleted");
       navigate("/");
-    } catch {
-      toast.error("Failed to delete");
+    } catch (err) {
+      toast.error(err.response?.data?.error || "Failed to delete");
     }
   };
 
@@ -58,10 +70,16 @@ export default function PostPage() {
   if (!post) return null;
 
   const isAuthor = user?.id === post.author_id;
+  const isAdmin = user?.role === "admin" || user?.role === "editor";
+  const canEdit = isAuthor || isAdmin;
+
   const readingTime =
     post.reading_time ||
     Math.ceil((post.content?.split(" ").length || 0) / 200) ||
     1;
+
+  const authorName =
+    post.author_username || post.author_full_name || "Anonymous";
 
   return (
     <div
@@ -167,14 +185,22 @@ export default function PostPage() {
               justifyContent: "center",
               fontSize: 14,
               color: "var(--text-secondary)",
+              overflow: "hidden",
+              flexShrink: 0,
             }}
           >
-            {post.author_username?.[0]?.toUpperCase() || "A"}
+            {post.author_avatar ? (
+              <img
+                src={post.author_avatar}
+                alt={authorName}
+                style={{ width: "100%", height: "100%", objectFit: "cover" }}
+              />
+            ) : (
+              authorName[0]?.toUpperCase() || "A"
+            )}
           </div>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 400 }}>
-              {post.author_username || "Anonymous"}
-            </div>
+            <div style={{ fontSize: 14, fontWeight: 400 }}>{authorName}</div>
             <div style={{ fontSize: 12, color: "var(--text-tertiary)" }}>
               {post.published_at
                 ? format(new Date(post.published_at), "MMM d, yyyy")
@@ -185,14 +211,15 @@ export default function PostPage() {
           </div>
         </div>
 
-        {/* Author actions */}
-        {isAuthor && (
+        {canEdit && (
           <div style={{ display: "flex", gap: 8 }}>
-            <Link to={`/posts/${post.id}/edit`}>
-              <Button variant="secondary" size="sm">
-                Edit
-              </Button>
-            </Link>
+            {isAuthor && (
+              <Link to={`/posts/${post.id}/edit`}>
+                <Button variant="secondary" size="sm">
+                  Edit
+                </Button>
+              </Link>
+            )}
             <Button variant="danger" size="sm" onClick={handleDelete}>
               Delete
             </Button>
@@ -224,7 +251,7 @@ export default function PostPage() {
         </ReactMarkdown>
       </div>
 
-      {/* Like bar */}
+      {/* Like / stats bar */}
       <div
         style={{
           display: "flex",
@@ -239,6 +266,7 @@ export default function PostPage() {
       >
         <button
           onClick={handleLike}
+          disabled={liking}
           style={{
             display: "flex",
             alignItems: "center",
@@ -248,6 +276,7 @@ export default function PostPage() {
             fontSize: 14,
             transition: "color 0.2s",
             padding: 0,
+            cursor: liking ? "not-allowed" : "pointer",
           }}
         >
           <svg
@@ -264,6 +293,11 @@ export default function PostPage() {
             {likeCount} {likeCount === 1 ? "like" : "likes"}
           </span>
         </button>
+        <span style={{ color: "var(--text-tertiary)", fontSize: 13 }}>·</span>
+        <span style={{ color: "var(--text-tertiary)", fontSize: 13 }}>
+          {post.comment_count || 0}{" "}
+          {(post.comment_count || 0) === 1 ? "comment" : "comments"}
+        </span>
         <span style={{ color: "var(--text-tertiary)", fontSize: 13 }}>·</span>
         <span style={{ color: "var(--text-tertiary)", fontSize: 13 }}>
           {post.view_count || 0} views
