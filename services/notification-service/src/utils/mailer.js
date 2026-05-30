@@ -2,58 +2,63 @@ const nodemailer = require("nodemailer");
 const logger = require("./logger");
 const templates = require("./emailTemplates");
 
-// Transporter
-
 let transporter;
 
 const getTransporter = async () => {
   if (transporter) return transporter;
 
-  if (process.env.NODE_ENV === "production") {
-    if (
-      !process.env.SMTP_HOST ||
-      !process.env.SMTP_USER ||
-      !process.env.SMTP_PASS
-    ) {
-      throw new Error(
-        "SMTP_HOST, SMTP_USER, and SMTP_PASS must be set in production",
-      );
-    }
+  if (process.env.SMTP_HOST && process.env.SMTP_PASS) {
     transporter = nodemailer.createTransport({
       host: process.env.SMTP_HOST,
       port: parseInt(process.env.SMTP_PORT) || 587,
       secure: false,
       auth: {
-        user: process.env.SMTP_USER,
+        user: process.env.SMTP_USER || "resend",
         pass: process.env.SMTP_PASS,
       },
     });
-  } else {
-    const account = await nodemailer.createTestAccount();
-    transporter = nodemailer.createTransport({
-      host: "smtp.ethereal.email",
-      port: 587,
-      auth: {
-        user: account.user,
-        pass: account.pass,
-      },
-    });
-    logger.info(
-      `Ethereal SMTP ready — preview emails at https://ethereal.email`,
-    );
+
+    // Verify connection
+    try {
+      await transporter.verify();
+      logger.info(`SMTP connected → ${process.env.SMTP_HOST}`);
+    } catch (err) {
+      logger.warn(
+        `SMTP verify failed: ${err.message} — falling back to Ethereal`,
+      );
+      transporter = null;
+      return getEtherealTransporter();
+    }
+
+    return transporter;
   }
 
+  return getEtherealTransporter();
+};
+
+const getEtherealTransporter = async () => {
+  const account = await nodemailer.createTestAccount();
+  transporter = nodemailer.createTransport({
+    host: "smtp.ethereal.email",
+    port: 587,
+    auth: {
+      user: account.user,
+      pass: account.pass,
+    },
+  });
+  logger.info(
+    "Using Ethereal (fake SMTP) — set SMTP_HOST + SMTP_PASS in .env for real emails",
+  );
   return transporter;
 };
 
-// Send email
 /**
  * @param {object} opts
- * @param {string} opts.to          - recipient email address
- * @param {string} opts.subject     - email subject (used when no templateName)
- * @param {string} [opts.templateName] - key in emailTemplates.js
- * @param {object} [opts.templateData] - data passed to the template function
- * @param {string} [opts.html]      - raw HTML override (skips template)
+ * @param {string} opts.to
+ * @param {string} opts.subject
+ * @param {string} [opts.templateName]
+ * @param {object} [opts.templateData]
+ * @param {string} [opts.html]
  */
 const sendEmail = async ({ to, subject, templateName, templateData, html }) => {
   try {
@@ -72,15 +77,16 @@ const sendEmail = async ({ to, subject, templateName, templateData, html }) => {
       html: emailHtml,
     });
 
-    logger.info(`Email sent to ${to}: ${info.messageId}`);
+    logger.info(`Email sent to ${to} — messageId: ${info.messageId}`);
 
-    if (process.env.NODE_ENV !== "production") {
-      logger.info(`Preview URL: ${nodemailer.getTestMessageUrl(info)}`);
+    const previewUrl = nodemailer.getTestMessageUrl(info);
+    if (previewUrl) {
+      logger.info(`Preview URL: ${previewUrl}`);
     }
 
     return info;
   } catch (err) {
-    logger.error(`Email send failed to ${to}:`, err.message);
+    logger.error(`Email failed to ${to}: ${err.message}`);
     throw err;
   }
 };
