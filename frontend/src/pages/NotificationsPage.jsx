@@ -1,205 +1,89 @@
 import { useState, useEffect, useCallback } from "react";
-import { notificationsApi } from "../lib/api";
-import { Button, PageLoader, Empty } from "../components/ui";
-import { formatDistanceToNow } from "date-fns";
 import { Link } from "react-router-dom";
+import { notificationsApi } from "../lib/api";
+import { PageLoader } from "../components/ui";
+import { formatDistanceToNow, isToday, isYesterday, format } from "date-fns";
 import toast from "react-hot-toast";
 
-const TYPE_ICONS = {
-  comment_on_post: "💬",
-  reply_to_comment: "↩️",
-  post_published: "📝",
-  post_liked: "❤️",
-  new_follower: "👤",
-  welcome: "👋",
-  password_reset: "🔐",
-  email_verify: "✉️",
-  system: "🔔",
+// Icon map
+const TYPE_CONFIG = {
+  comment_on_post: { icon: "💬", color: "#5b9cf6", label: "Comment" },
+  reply_to_comment: { icon: "↩️", color: "#5b9cf6", label: "Reply" },
+  post_published: { icon: "📝", color: "#4caf7d", label: "Published" },
+  post_liked: { icon: "❤️", color: "#e8613a", label: "Like" },
+  new_follower: { icon: "👤", color: "#e8c547", label: "Follower" },
+  welcome: { icon: "👋", color: "#4caf7d", label: "Welcome" },
+  password_reset: { icon: "🔐", color: "#a09d98", label: "Security" },
+  email_verify: { icon: "✉️", color: "#5b9cf6", label: "Verify" },
+  system: { icon: "🔔", color: "#a09d98", label: "System" },
 };
 
-export default function NotificationsPage() {
-  const [notifications, setNotifications] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [marking, setMarking] = useState(false);
-  const [unreadOnly, setUnreadOnly] = useState(false);
-
-  const fetchNotifications = useCallback(async () => {
-    try {
-      const { data } = await notificationsApi.list({
-        limit: 50,
-        unreadOnly: unreadOnly ? "true" : "false",
-      });
-      setNotifications(data.notifications || []);
-    } catch {
-      toast.error("Failed to load notifications");
-    } finally {
-      setLoading(false);
-    }
-  }, [unreadOnly]);
-
-  useEffect(() => {
-    setLoading(true);
-    fetchNotifications();
-  }, [fetchNotifications]);
-
-  useEffect(() => {
-    const interval = setInterval(fetchNotifications, 30000);
-    return () => clearInterval(interval);
-  }, [fetchNotifications]);
-
-  const markAllRead = async () => {
-    setMarking(true);
-    try {
-      await notificationsApi.markAllRead();
-      setNotifications((n) => n.map((x) => ({ ...x, isRead: true })));
-      toast.success("All marked as read");
-    } catch {
-      toast.error("Failed");
-    } finally {
-      setMarking(false);
-    }
-  };
-
-  const markRead = async (id) => {
-    try {
-      await notificationsApi.markRead(id);
-      setNotifications((n) =>
-        n.map((x) => (x._id === id ? { ...x, isRead: true } : x)),
-      );
-    } catch {}
-  };
-
-  const deleteNotif = async (id) => {
-    try {
-      await notificationsApi.delete(id);
-      setNotifications((n) => n.filter((x) => x._id !== id));
-    } catch {
-      toast.error("Failed to delete");
-    }
-  };
-
-  const unreadCount = notifications.filter((n) => !n.isRead).length;
-
-  return (
-    <div
-      style={{
-        maxWidth: 680,
-        margin: "0 auto",
-        padding: "2rem 1.5rem",
-        animation: "fadeUp 0.4s ease",
-      }}
-    >
-      {/* Header */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: "1.5rem",
-          flexWrap: "wrap",
-          gap: 12,
-        }}
-      >
-        <div>
-          <h1
-            style={{
-              fontFamily: "var(--serif)",
-              fontSize: "1.6rem",
-              fontWeight: 400,
-            }}
-          >
-            Notifications
-          </h1>
-          {unreadCount > 0 && (
-            <p
-              style={{
-                fontSize: 13,
-                color: "var(--text-tertiary)",
-                marginTop: 4,
-              }}
-            >
-              {unreadCount} unread
-            </p>
-          )}
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <button
-            onClick={() => setUnreadOnly((v) => !v)}
-            style={{
-              padding: "5px 14px",
-              borderRadius: 20,
-              fontSize: 13,
-              background: unreadOnly ? "var(--ink-muted)" : "transparent",
-              color: unreadOnly ? "var(--text)" : "var(--text-tertiary)",
-              border: `1px solid ${unreadOnly ? "var(--border)" : "transparent"}`,
-              transition: "all 0.2s",
-              cursor: "pointer",
-            }}
-          >
-            Unread only
-          </button>
-          {unreadCount > 0 && (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={markAllRead}
-              loading={marking}
-            >
-              Mark all read
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {/* List */}
-      {loading ? (
-        <PageLoader />
-      ) : notifications.length === 0 ? (
-        <Empty
-          icon="🔔"
-          title="You're all caught up"
-          description={
-            unreadOnly
-              ? "No unread notifications."
-              : "No notifications to show."
-          }
-        />
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          {notifications.map((n) => (
-            <NotifItem
-              key={n._id}
-              notif={n}
-              onRead={() => markRead(n._id)}
-              onDelete={() => deleteNotif(n._id)}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
+// Date group label
+function groupLabel(dateStr) {
+  const d = new Date(dateStr);
+  if (isToday(d)) return "Today";
+  if (isYesterday(d)) return "Yesterday";
+  return format(d, "MMMM d, yyyy");
 }
 
-function NotifItem({ notif, onRead, onDelete }) {
-  const icon = TYPE_ICONS[notif.type] || "🔔";
+function groupNotifications(notifications) {
+  const groups = [];
+  let currentLabel = null;
+  let currentItems = [];
+
+  for (const n of notifications) {
+    const label = groupLabel(n.createdAt);
+    if (label !== currentLabel) {
+      if (currentItems.length)
+        groups.push({ label: currentLabel, items: currentItems });
+      currentLabel = label;
+      currentItems = [n];
+    } else {
+      currentItems.push(n);
+    }
+  }
+  if (currentItems.length)
+    groups.push({ label: currentLabel, items: currentItems });
+  return groups;
+}
+
+// Single notification row
+function NotifRow({ notif, onRead, onDelete }) {
+  const cfg = TYPE_CONFIG[notif.type] || TYPE_CONFIG.system;
+  const [hovering, setHovering] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async (e) => {
+    e.stopPropagation();
+    setDeleting(true);
+    await onDelete();
+  };
+
+  if (deleting) return null;
 
   return (
     <div
+      onClick={() => !notif.isRead && onRead()}
+      onMouseEnter={() => setHovering(true)}
+      onMouseLeave={() => setHovering(false)}
       style={{
         display: "flex",
         alignItems: "flex-start",
-        gap: 12,
-        padding: "1rem",
-        background: notif.isRead ? "transparent" : "var(--ink-soft)",
+        gap: 14,
+        padding: "14px 16px",
         borderRadius: "var(--radius)",
-        border: `1px solid ${notif.isRead ? "transparent" : "var(--border-soft)"}`,
-        transition: "all 0.2s",
+        background: notif.isRead
+          ? hovering
+            ? "var(--ink-soft)"
+            : "transparent"
+          : "var(--ink-soft)",
+        border: `1px solid ${notif.isRead ? (hovering ? "var(--border-soft)" : "transparent") : "var(--border-soft)"}`,
         cursor: notif.isRead ? "default" : "pointer",
+        transition: "background 0.15s, border-color 0.15s",
         position: "relative",
       }}
-      onClick={() => !notif.isRead && onRead()}
     >
-      {/* Unread indicator */}
+      {/* Unread accent bar */}
       {!notif.isRead && (
         <div
           style={{
@@ -208,40 +92,40 @@ function NotifItem({ notif, onRead, onDelete }) {
             top: "50%",
             transform: "translateY(-50%)",
             width: 3,
-            height: "60%",
+            height: "55%",
             background: "var(--accent)",
             borderRadius: "0 3px 3px 0",
           }}
         />
       )}
 
-      {/* Icon */}
+      {/* Icon bubble */}
       <div
         style={{
-          width: 38,
-          height: 38,
+          width: 40,
+          height: 40,
           borderRadius: "50%",
           background: "var(--ink-muted)",
           border: "1px solid var(--border)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          fontSize: 16,
+          fontSize: 17,
           flexShrink: 0,
         }}
       >
-        {icon}
+        {cfg.icon}
       </div>
 
-      {/* Content */}
+      {/* Text content */}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div
           style={{
             fontSize: 14,
             fontWeight: notif.isRead ? 300 : 400,
             color: "var(--text)",
+            lineHeight: 1.45,
             marginBottom: 3,
-            lineHeight: 1.4,
           }}
         >
           {notif.title}
@@ -262,51 +146,381 @@ function NotifItem({ notif, onRead, onDelete }) {
             {notif.body}
           </div>
         )}
+
         <div
-          style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 5 }}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            marginTop: 6,
+          }}
         >
-          {formatDistanceToNow(new Date(notif.createdAt), { addSuffix: true })}
+          <span style={{ fontSize: 11, color: "var(--text-tertiary)" }}>
+            {formatDistanceToNow(new Date(notif.createdAt), {
+              addSuffix: true,
+            })}
+          </span>
+
+          {!notif.isRead && (
+            <span
+              style={{
+                fontSize: 10,
+                color: "var(--accent)",
+                fontWeight: 500,
+                letterSpacing: "0.05em",
+                textTransform: "uppercase",
+              }}
+            >
+              New
+            </span>
+          )}
         </div>
       </div>
 
-      {/* Actions */}
-      <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+      {/* Right actions */}
+      <div
+        style={{
+          display: "flex",
+          gap: 6,
+          flexShrink: 0,
+          alignItems: "center",
+          opacity: hovering ? 1 : 0,
+          transition: "opacity 0.15s",
+        }}
+      >
         {notif.actionUrl && (
           <Link
             to={notif.actionUrl}
             onClick={(e) => e.stopPropagation()}
             style={{
-              padding: "4px 10px",
+              padding: "4px 12px",
               borderRadius: 6,
               fontSize: 12,
               background: "var(--ink-muted)",
               color: "var(--text-secondary)",
+              border: "1px solid var(--border)",
+              transition: "color 0.15s",
+              whiteSpace: "nowrap",
             }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = "var(--text)")}
+            onMouseLeave={(e) =>
+              (e.currentTarget.style.color = "var(--text-secondary)")
+            }
           >
             View
           </Link>
         )}
+
         <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
+          onClick={handleDelete}
+          title="Dismiss"
           style={{
-            padding: "4px 8px",
+            width: 28,
+            height: 28,
             borderRadius: 6,
-            fontSize: 12,
-            background: "none",
+            background: "transparent",
+            border: "1px solid transparent",
             color: "var(--text-tertiary)",
-            transition: "color 0.15s",
+            fontSize: 13,
             cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            transition: "all 0.15s",
+            fontFamily: "var(--sans)",
           }}
-          onMouseEnter={(e) => (e.target.style.color = "var(--accent)")}
-          onMouseLeave={(e) => (e.target.style.color = "var(--text-tertiary)")}
-          title="Delete"
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = "var(--accent-soft)";
+            e.currentTarget.style.color = "var(--accent)";
+            e.currentTarget.style.borderColor = "rgba(232,97,58,0.2)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "transparent";
+            e.currentTarget.style.color = "var(--text-tertiary)";
+            e.currentTarget.style.borderColor = "transparent";
+          }}
         >
           ✕
         </button>
       </div>
+    </div>
+  );
+}
+
+//  Empty state
+function EmptyNotifications({ unreadOnly }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        padding: "5rem 2rem",
+        color: "var(--text-tertiary)",
+        animation: "fadeUp 0.4s ease both",
+      }}
+    >
+      <div
+        style={{
+          width: 72,
+          height: 72,
+          borderRadius: "50%",
+          background: "var(--ink-soft)",
+          border: "1px solid var(--border-soft)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: 28,
+          marginBottom: 20,
+        }}
+      >
+        🔔
+      </div>
+      <h3
+        style={{
+          fontFamily: "var(--serif)",
+          fontSize: "1.2rem",
+          color: "var(--text-secondary)",
+          marginBottom: 8,
+        }}
+      >
+        {unreadOnly ? "No unread notifications" : "You're all caught up"}
+      </h3>
+      <p
+        style={{
+          fontSize: 14,
+          maxWidth: 280,
+          textAlign: "center",
+          lineHeight: 1.6,
+        }}
+      >
+        {unreadOnly
+          ? "All notifications have been read."
+          : "Activity from posts, comments, and follows will appear here."}
+      </p>
+    </div>
+  );
+}
+
+//  Main page
+export default function NotificationsPage() {
+  const [notifications, setNotifications] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [marking, setMarking] = useState(false);
+  const [unreadOnly, setUnreadOnly] = useState(false);
+
+  const fetchNotifications = useCallback(
+    async (silent = false) => {
+      if (!silent) setLoading(true);
+      try {
+        const { data } = await notificationsApi.list({
+          limit: 50,
+          unreadOnly: unreadOnly ? "true" : "false",
+        });
+        setNotifications(data.notifications || []);
+      } catch {
+        if (!silent) toast.error("Failed to load notifications");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [unreadOnly],
+  );
+
+  useEffect(() => {
+    fetchNotifications(false);
+  }, [fetchNotifications]);
+
+  useEffect(() => {
+    const id = setInterval(() => fetchNotifications(true), 30000);
+    return () => clearInterval(id);
+  }, [fetchNotifications]);
+
+  const markRead = async (id) => {
+    try {
+      await notificationsApi.markRead(id);
+      setNotifications((prev) =>
+        prev.map((n) => (n._id === id ? { ...n, isRead: true } : n)),
+      );
+    } catch {}
+  };
+
+  const deleteNotif = async (id) => {
+    try {
+      await notificationsApi.delete(id);
+      setNotifications((prev) => prev.filter((n) => n._id !== id));
+    } catch {
+      toast.error("Failed to remove notification");
+    }
+  };
+
+  const markAllRead = async () => {
+    setMarking(true);
+    try {
+      await notificationsApi.markAllRead();
+      setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+      toast.success("All marked as read");
+    } catch {
+      toast.error("Failed");
+    } finally {
+      setMarking(false);
+    }
+  };
+
+  const unreadCount = notifications.filter((n) => !n.isRead).length;
+  const groups = groupNotifications(notifications);
+
+  return (
+    <div
+      style={{
+        maxWidth: 680,
+        margin: "0 auto",
+        padding: "2rem 1.5rem 4rem",
+        animation: "fadeUp 0.4s ease both",
+      }}
+    >
+      {/* Header */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          marginBottom: "2rem",
+          flexWrap: "wrap",
+          gap: 12,
+        }}
+      >
+        <div>
+          <h1
+            style={{
+              fontFamily: "var(--serif)",
+              fontSize: "1.8rem",
+              fontWeight: 400,
+              letterSpacing: "-0.02em",
+              marginBottom: 4,
+            }}
+          >
+            Notifications
+            {unreadCount > 0 && (
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: "var(--accent)",
+                  color: "#fff",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  width: 22,
+                  height: 22,
+                  borderRadius: "50%",
+                  marginLeft: 10,
+                  verticalAlign: "middle",
+                  fontFamily: "var(--sans)",
+                }}
+              >
+                {unreadCount > 9 ? "9+" : unreadCount}
+              </span>
+            )}
+          </h1>
+          <p style={{ fontSize: 13, color: "var(--text-tertiary)" }}>
+            {unreadCount > 0
+              ? `${unreadCount} unread notification${unreadCount > 1 ? "s" : ""}`
+              : "All caught up"}
+          </p>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button
+            onClick={() => setUnreadOnly((v) => !v)}
+            style={{
+              padding: "6px 14px",
+              borderRadius: 20,
+              fontSize: 13,
+              background: unreadOnly ? "var(--ink-muted)" : "transparent",
+              color: unreadOnly ? "var(--text)" : "var(--text-tertiary)",
+              border: `1px solid ${unreadOnly ? "var(--border)" : "transparent"}`,
+              cursor: "pointer",
+              transition: "all 0.2s",
+              fontFamily: "var(--sans)",
+            }}
+          >
+            Unread only
+          </button>
+
+          {unreadCount > 0 && (
+            <button
+              onClick={markAllRead}
+              disabled={marking}
+              style={{
+                padding: "6px 14px",
+                borderRadius: 20,
+                fontSize: 13,
+                background: "var(--ink-soft)",
+                color: marking
+                  ? "var(--text-tertiary)"
+                  : "var(--text-secondary)",
+                border: "1px solid var(--border)",
+                cursor: marking ? "not-allowed" : "pointer",
+                transition: "all 0.2s",
+                fontFamily: "var(--sans)",
+              }}
+            >
+              {marking ? "Marking…" : "Mark all read"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Content */}
+      {loading ? (
+        <PageLoader />
+      ) : notifications.length === 0 ? (
+        <EmptyNotifications unreadOnly={unreadOnly} />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+          {groups.map((group) => (
+            <div key={group.label}>
+              {/* Date group header */}
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 500,
+                  color: "var(--text-tertiary)",
+                  letterSpacing: "0.07em",
+                  textTransform: "uppercase",
+                  marginBottom: 8,
+                  paddingLeft: 2,
+                }}
+              >
+                {group.label}
+              </div>
+
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 2,
+                  background: "var(--ink-soft)",
+                  border: "1px solid var(--border-soft)",
+                  borderRadius: "var(--radius-lg)",
+                  padding: "4px",
+                  overflow: "hidden",
+                }}
+              >
+                {group.items.map((n) => (
+                  <NotifRow
+                    key={n._id}
+                    notif={n}
+                    onRead={() => markRead(n._id)}
+                    onDelete={() => deleteNotif(n._id)}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
