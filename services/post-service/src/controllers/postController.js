@@ -138,77 +138,75 @@ const createPost = async (req, res) => {
 // GET POSTS
 const getPosts = async (req, res) => {
   try {
-    const redis = getRedis();
+    const safeParams = {};
+    const CACHE_KEY_PARAMS = [
+      "page",
+      "limit",
+      "status",
+      "category",
+      "tag",
+      "sort",
+    ];
+    for (const key of CACHE_KEY_PARAMS) {
+      if (req.query[key] !== undefined) safeParams[key] = req.query[key];
+    }
+
     const userId = req.headers["x-user-id"];
 
-    const safeParams = { uid: userId || "anon" };
-    for (const key of CACHE_KEY_PARAMS) {
-      if (req.query[key] !== undefined) {
-        safeParams[key] = req.query[key];
+    const cacheKey = `posts:list:${userId || "anon"}:${JSON.stringify(safeParams)}`;
+
+    const { getRedis } = require("../utils/redis");
+    const cacheGet = async (key) => {
+      try {
+        const v = await getRedis().get(key);
+        return v ? JSON.parse(v) : null;
+      } catch {
+        return null;
       }
-    }
+    };
+    const cacheSet = async (key, value, ttl = 300) => {
+      try {
+        await getRedis().setex(key, ttl, JSON.stringify(value));
+      } catch {}
+    };
 
-    const cacheKey = `posts:list:${JSON.stringify(safeParams)}`;
+    const cached = await cacheGet(cacheKey);
+    if (cached) return res.json(cached);
 
-    const cached = await redis.get(cacheKey);
-    if (cached) {
-      return res.json(JSON.parse(cached));
-    }
-
+    const { pool } = require("../utils/database");
     const {
       page = 1,
-      limit = 9,
+      limit = 20,
+      sort = "published_at",
       category,
       tag,
-      sort = "published_at",
     } = req.query;
 
     const pageNum = Math.max(1, parseInt(page) || 1);
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 9));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 20));
     const offset = (pageNum - 1) * limitNum;
 
     const params = [];
-
-    let visibilityCondition = `(p.status = 'published' AND p.visibility = 'public')`;
+    const joins = [];
+    const filters = ["(p.status = 'published' AND p.visibility = 'public')"];
 
     if (userId) {
       params.push(userId);
-      visibilityCondition += ` OR p.author_id = $${params.length}`;
+      filters.push(`p.author_id = $${params.length}`);
     }
 
-    const whereClause = `WHERE (${visibilityCondition})`;
-
-    let categoryJoin = "";
     if (category) {
       params.push(category);
-      categoryJoin = `
-        JOIN categories c
-          ON c.id = p.category_id
-         AND c.slug = $${params.length}
-      `;
+      joins.push(
+        `JOIN categories c ON c.id = p.category_id AND c.slug = $${params.length}`,
+      );
     }
 
-    let tagJoin = "";
     if (tag) {
       params.push(tag);
-      tagJoin = `
-        JOIN post_tags pt ON pt.post_id = p.id
-        JOIN tags t ON t.id = pt.tag_id
-         AND t.slug = $${params.length}
-      `;
-    }
-
-    let likedSelect = "false AS is_liked";
-
-    if (userId) {
-      likedSelect = `
-        EXISTS(
-          SELECT 1
-          FROM post_likes pl
-          WHERE pl.post_id = p.id
-            AND pl.user_id = $1
-        ) AS is_liked
-      `;
+      joins.push(
+        `JOIN post_tags pt ON pt.post_id = p.id JOIN tags t ON t.id = pt.tag_id AND t.slug = $${params.length}`,
+      );
     }
 
     const allowedSorts = {
@@ -216,34 +214,31 @@ const getPosts = async (req, res) => {
       created_at: "p.created_at",
       view_count: "p.view_count",
     };
-
     const orderBy = allowedSorts[sort] || "p.published_at";
 
     params.push(limitNum, offset);
+    const limitParam = `$${params.length - 1}`;
+    const offsetParam = `$${params.length}`;
 
-    const limitIdx = params.length - 1;
-    const offsetIdx = params.length;
+    const whereClause = `WHERE ${filters.join(" OR ")}`;
+    const joinClause = joins.join(" ");
 
-    const result = await pool.query(
-      `
-      SELECT
-        p.*,
-        ${likedSelect},
-        COUNT(*) OVER() AS total_count
+    const isLikedSelect = userId
+      ? `EXISTS (SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = '${userId}') AS is_liked`
+      : `FALSE AS is_liked`;
+
+    const sql = `
+      SELECT p.*, COUNT(*) OVER() AS total_count, ${isLikedSelect}
       FROM posts p
-      ${categoryJoin}
-      ${tagJoin}
+      ${joinClause}
       ${whereClause}
       ORDER BY ${orderBy} DESC NULLS LAST
-      LIMIT $${limitIdx}
-      OFFSET $${offsetIdx}
-      `,
-      params,
-    );
+      LIMIT ${limitParam} OFFSET ${offsetParam}
+    `;
 
-    const total = result.rows[0]?.total_count
-      ? parseInt(result.rows[0].total_count, 10)
-      : 0;
+    const result = await pool.query(sql, params);
+
+    const total = result.rows[0] ? parseInt(result.rows[0].total_count) : 0;
 
     const response = {
       posts: result.rows,
@@ -255,16 +250,16 @@ const getPosts = async (req, res) => {
       },
     };
 
-    await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(response));
-
-    return res.json(response);
+    await cacheSet(cacheKey, response);
+    res.json(response);
   } catch (err) {
+    const logger = require("../utils/logger");
     logger.error("Get posts error:", err);
-    return res.status(500).json({
-      error: "Failed to fetch posts",
-    });
+    res.status(500).json({ error: "Failed to fetch posts" });
   }
 };
+
+module.exports = getPosts;
 
 // GET SINGLE POST
 const getPost = async (req, res) => {
