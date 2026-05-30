@@ -14,48 +14,7 @@ const DOMPurify = createDOMPurify(window);
 const CACHE_TTL = 300;
 const CACHE_KEY_PARAMS = ["page", "limit", "status", "category", "tag", "sort"];
 
-// Redis helpers
-const cacheGet = async (key) => {
-  try {
-    const redis = getRedis();
-    const val = await redis.get(key);
-    return val ? JSON.parse(val) : null;
-  } catch (err) {
-    logger.warn("Cache get failed:", err.message);
-    return null;
-  }
-};
-
-const cacheSet = async (key, value, ttl = CACHE_TTL) => {
-  try {
-    const redis = getRedis();
-    await redis.setex(key, ttl, JSON.stringify(value));
-  } catch (err) {
-    logger.warn("Cache set failed:", err.message);
-  }
-};
-
-const cacheInvalidate = async (pattern) => {
-  try {
-    const redis = getRedis();
-    let cursor = "0";
-    do {
-      const [next, keys] = await redis.scan(
-        cursor,
-        "MATCH",
-        pattern,
-        "COUNT",
-        100,
-      );
-      cursor = next;
-      if (keys.length) await redis.del(keys);
-    } while (cursor !== "0");
-  } catch (err) {
-    logger.warn("Cache invalidation failed:", err.message);
-  }
-};
-
-// Slug helper
+// Helpers
 const generateSlug = async (title, excludeId = null) => {
   const base = slugify(title, { lower: true, strict: true });
   let slug = base;
@@ -69,16 +28,42 @@ const generateSlug = async (title, excludeId = null) => {
     if (rows.length === 0) return slug;
     slug = `${base}-${counter++}`;
   }
-  throw new Error("Could not generate a unique slug after 100 attempts");
+  throw new Error("Could not generate unique slug");
 };
 
 const calculateReadingTime = (content) =>
-  Math.ceil(content.trim().split(/\s+/).length / 200);
+  Math.ceil(content.trim().split(/\s+/).length / 200) || 1;
+
+const invalidatePostsCache = async () => {
+  try {
+    const redis = getRedis();
+    let cursor = "0";
+    do {
+      const [nextCursor, keys] = await redis.scan(
+        cursor,
+        "MATCH",
+        "posts:list:*",
+        "COUNT",
+        100,
+      );
+      cursor = nextCursor;
+      if (keys.length) await redis.del(keys);
+    } while (cursor !== "0");
+  } catch (err) {
+    logger.warn("Cache invalidation failed:", err.message);
+  }
+};
 
 // CREATE POST
 const createPost = async (req, res) => {
   try {
     const authorId = String(req.headers["x-user-id"]);
+
+    const authorUsername =
+      req.headers["x-user-username"] ||
+      req.headers["x-user-email"]?.split("@")[0] ||
+      "Anonymous";
+
     const {
       title,
       content,
@@ -92,9 +77,10 @@ const createPost = async (req, res) => {
       seoDescription,
     } = req.body;
 
-    if (!title || !content) {
-      return res.status(400).json({ error: "title and content are required" });
-    }
+    if (!title?.trim())
+      return res.status(400).json({ error: "title is required" });
+    if (!content?.trim())
+      return res.status(400).json({ error: "content is required" });
 
     const slug = await generateSlug(title);
     const contentHtml = DOMPurify.sanitize(marked.parse(content));
@@ -104,10 +90,10 @@ const createPost = async (req, res) => {
     const { rows } = await pool.query(
       `INSERT INTO posts (
          title, slug, excerpt, content, content_html,
-         cover_image_url, author_id, category_id,
+         cover_image_url, author_id, author_username, category_id,
          status, visibility, scheduled_at, published_at,
          reading_time, seo_title, seo_description
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
        RETURNING *`,
       [
         title,
@@ -117,6 +103,7 @@ const createPost = async (req, res) => {
         contentHtml,
         coverImageUrl || null,
         authorId,
+        authorUsername,
         categoryId ? Number(categoryId) : null,
         status,
         visibility,
@@ -129,7 +116,7 @@ const createPost = async (req, res) => {
     );
 
     const post = rows[0];
-    await cacheInvalidate("posts:list:*");
+    await invalidatePostsCache();
 
     if (status === "published") {
       await publishEvent("post.published", {
@@ -137,6 +124,7 @@ const createPost = async (req, res) => {
         title: post.title,
         authorId,
         slug: post.slug,
+        excerpt: post.excerpt || "",
       });
     }
 
@@ -150,50 +138,77 @@ const createPost = async (req, res) => {
 // GET POSTS
 const getPosts = async (req, res) => {
   try {
-    const safeParams = {};
+    const redis = getRedis();
+    const userId = req.headers["x-user-id"];
+
+    const safeParams = { uid: userId || "anon" };
     for (const key of CACHE_KEY_PARAMS) {
-      if (req.query[key] !== undefined) safeParams[key] = req.query[key];
+      if (req.query[key] !== undefined) {
+        safeParams[key] = req.query[key];
+      }
     }
+
     const cacheKey = `posts:list:${JSON.stringify(safeParams)}`;
 
-    const cached = await cacheGet(cacheKey);
-    if (cached) return res.json(cached);
+    const cached = await redis.get(cacheKey);
+    if (cached) {
+      return res.json(JSON.parse(cached));
+    }
 
     const {
       page = 1,
-      limit = 20,
-      sort = "published_at",
+      limit = 9,
       category,
       tag,
+      sort = "published_at",
     } = req.query;
 
     const pageNum = Math.max(1, parseInt(page) || 1);
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 20));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 9));
     const offset = (pageNum - 1) * limitNum;
 
     const params = [];
-    const joins = [];
-    const filters = ["(p.status = 'published' AND p.visibility = 'public')"];
 
-    // Authenticated users can also see their own drafts
-    const userId = req.headers["x-user-id"];
+    let visibilityCondition = `(p.status = 'published' AND p.visibility = 'public')`;
+
     if (userId) {
       params.push(userId);
-      filters.push(`p.author_id = $${params.length}`);
+      visibilityCondition += ` OR p.author_id = $${params.length}`;
     }
 
+    const whereClause = `WHERE (${visibilityCondition})`;
+
+    let categoryJoin = "";
     if (category) {
       params.push(category);
-      joins.push(
-        `JOIN categories c ON c.id = p.category_id AND c.slug = $${params.length}`,
-      );
+      categoryJoin = `
+        JOIN categories c
+          ON c.id = p.category_id
+         AND c.slug = $${params.length}
+      `;
     }
 
+    let tagJoin = "";
     if (tag) {
       params.push(tag);
-      joins.push(
-        `JOIN post_tags pt ON pt.post_id = p.id JOIN tags t ON t.id = pt.tag_id AND t.slug = $${params.length}`,
-      );
+      tagJoin = `
+        JOIN post_tags pt ON pt.post_id = p.id
+        JOIN tags t ON t.id = pt.tag_id
+         AND t.slug = $${params.length}
+      `;
+    }
+
+    let likedSelect = "false AS is_liked";
+
+    if (userId) {
+      likedSelect = `
+        EXISTS(
+          SELECT 1
+          FROM post_likes pl
+          WHERE pl.post_id = p.id
+            AND pl.user_id = $1
+        ) AS is_liked
+      `;
     }
 
     const allowedSorts = {
@@ -201,27 +216,34 @@ const getPosts = async (req, res) => {
       created_at: "p.created_at",
       view_count: "p.view_count",
     };
+
     const orderBy = allowedSorts[sort] || "p.published_at";
 
     params.push(limitNum, offset);
-    const limitParam = `$${params.length - 1}`;
-    const offsetParam = `$${params.length}`;
 
-    const whereClause = `WHERE ${filters.join(" OR ")}`;
-    const joinClause = joins.join(" ");
+    const limitIdx = params.length - 1;
+    const offsetIdx = params.length;
 
-    const sql = `
-      SELECT p.*, COUNT(*) OVER() AS total_count
+    const result = await pool.query(
+      `
+      SELECT
+        p.*,
+        ${likedSelect},
+        COUNT(*) OVER() AS total_count
       FROM posts p
-      ${joinClause}
+      ${categoryJoin}
+      ${tagJoin}
       ${whereClause}
       ORDER BY ${orderBy} DESC NULLS LAST
-      LIMIT ${limitParam} OFFSET ${offsetParam}
-    `;
+      LIMIT $${limitIdx}
+      OFFSET $${offsetIdx}
+      `,
+      params,
+    );
 
-    const result = await pool.query(sql, params);
-
-    const total = result.rows[0] ? parseInt(result.rows[0].total_count) : 0;
+    const total = result.rows[0]?.total_count
+      ? parseInt(result.rows[0].total_count, 10)
+      : 0;
 
     const response = {
       posts: result.rows,
@@ -233,41 +255,66 @@ const getPosts = async (req, res) => {
       },
     };
 
-    await cacheSet(cacheKey, response);
-    res.json(response);
+    await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(response));
+
+    return res.json(response);
   } catch (err) {
     logger.error("Get posts error:", err);
-    res.status(500).json({ error: "Failed to fetch posts" });
+    return res.status(500).json({
+      error: "Failed to fetch posts",
+    });
   }
 };
 
-// SINGLE POST
+// GET SINGLE POST
 const getPost = async (req, res) => {
   try {
     const { slugOrId } = req.params;
+    const userId = req.headers["x-user-id"];
+
+    let likedSelect = "false AS is_liked";
+    const queryParams = [slugOrId];
+    if (userId) {
+      queryParams.push(userId); // $2
+      likedSelect = `EXISTS(
+        SELECT 1 FROM post_likes pl
+        WHERE pl.post_id = p.id AND pl.user_id = $2
+      ) AS is_liked`;
+    }
 
     let result = await pool.query(
-      "SELECT * FROM posts WHERE slug = $1 LIMIT 1",
-      [slugOrId],
+      `SELECT p.*, ${likedSelect} FROM posts p WHERE p.slug = $1 LIMIT 1`,
+      queryParams,
     );
 
     if (result.rows.length === 0 && /^[0-9a-f-]{36}$/i.test(slugOrId)) {
-      result = await pool.query("SELECT * FROM posts WHERE id = $1 LIMIT 1", [
-        slugOrId,
-      ]);
+      result = await pool.query(
+        `SELECT p.*, ${likedSelect} FROM posts p WHERE p.id = $1 LIMIT 1`,
+        queryParams,
+      );
     }
 
-    if (result.rows.length === 0) {
+    if (result.rows.length === 0)
       return res.status(404).json({ error: "Post not found" });
+
+    const post = result.rows[0];
+
+    // Deduplicated view count via Redis
+    if (userId) {
+      const redis = getRedis();
+      const viewKey = `viewed:${post.id}:${userId}`;
+      const already = await redis.get(viewKey).catch(() => null);
+      if (!already) {
+        pool
+          .query("UPDATE posts SET view_count = view_count + 1 WHERE id = $1", [
+            post.id,
+          ])
+          .catch(() => {});
+        redis.setex(viewKey, 3600, "1").catch(() => {});
+      }
     }
 
-    pool
-      .query("UPDATE posts SET view_count = view_count + 1 WHERE id = $1", [
-        result.rows[0].id,
-      ])
-      .catch((e) => logger.warn("View count update failed:", e.message));
-
-    res.json(result.rows[0]);
+    res.json(post);
   } catch (err) {
     logger.error("Get post error:", err);
     res.status(500).json({ error: "Failed to fetch post" });
@@ -280,12 +327,14 @@ const updatePost = async (req, res) => {
     const { id } = req.params;
     const authorId = req.headers["x-user-id"];
     const userRole = req.headers["x-user-role"];
+
     const {
       title,
       content,
       status,
       excerpt,
       visibility,
+      coverImageUrl,
       seoTitle,
       seoDescription,
     } = req.body;
@@ -293,17 +342,13 @@ const updatePost = async (req, res) => {
     const existing = await pool.query("SELECT * FROM posts WHERE id = $1", [
       id,
     ]);
-    if (existing.rows.length === 0) {
+    if (existing.rows.length === 0)
       return res.status(404).json({ error: "Post not found" });
-    }
 
     const post = existing.rows[0];
-    if (
-      post.author_id !== authorId &&
-      !["admin", "editor"].includes(userRole)
-    ) {
+
+    if (post.author_id !== authorId && !["admin", "editor"].includes(userRole))
       return res.status(403).json({ error: "Not authorized" });
-    }
 
     const slug = title ? await generateSlug(title, id) : post.slug;
     const contentHtml = content
@@ -324,30 +369,32 @@ const updatePost = async (req, res) => {
          excerpt         = COALESCE($5,  excerpt),
          status          = COALESCE($6,  status),
          visibility      = COALESCE($7,  visibility),
-         reading_time    = $8,
-         seo_title       = COALESCE($9,  seo_title),
-         seo_description = COALESCE($10, seo_description),
-         published_at    = $11,
+         cover_image_url = COALESCE($8,  cover_image_url),
+         reading_time    = $9,
+         seo_title       = COALESCE($10, seo_title),
+         seo_description = COALESCE($11, seo_description),
+         published_at    = $12,
          updated_at      = NOW()
-       WHERE id = $12
+       WHERE id = $13
        RETURNING *`,
       [
-        title,
+        title || null,
         slug,
-        content,
+        content || null,
         contentHtml,
-        excerpt,
-        status,
-        visibility,
+        excerpt || null,
+        status || null,
+        visibility || null,
+        coverImageUrl || null,
         readingTime,
-        seoTitle,
-        seoDescription,
+        seoTitle || null,
+        seoDescription || null,
         publishedAt,
         id,
       ],
     );
 
-    await cacheInvalidate("posts:list:*");
+    await invalidatePostsCache();
 
     if (wasPublished) {
       await publishEvent("post.published", {
@@ -355,6 +402,7 @@ const updatePost = async (req, res) => {
         title: result.rows[0].title,
         authorId,
         slug: result.rows[0].slug,
+        excerpt: result.rows[0].excerpt || "",
       });
     }
 
@@ -376,9 +424,9 @@ const deletePost = async (req, res) => {
       "SELECT author_id FROM posts WHERE id = $1",
       [id],
     );
-    if (existing.rows.length === 0) {
+    if (existing.rows.length === 0)
       return res.status(404).json({ error: "Post not found" });
-    }
+
     if (
       existing.rows[0].author_id !== authorId &&
       !["admin", "editor"].includes(userRole)
@@ -387,7 +435,7 @@ const deletePost = async (req, res) => {
     }
 
     await pool.query("DELETE FROM posts WHERE id = $1", [id]);
-    await cacheInvalidate("posts:list:*");
+    await invalidatePostsCache();
     res.json({ message: "Post deleted successfully" });
   } catch (err) {
     logger.error("Delete post error:", err);
@@ -403,13 +451,21 @@ const likePost = async (req, res) => {
     if (!userId)
       return res.status(401).json({ error: "Authentication required" });
 
-    const existing = await pool.query(
-      "SELECT 1 FROM post_likes WHERE user_id = $1 AND post_id = $2",
+    const insertResult = await pool.query(
+      `INSERT INTO post_likes (user_id, post_id)
+       VALUES ($1, $2)
+       ON CONFLICT (user_id, post_id) DO NOTHING`,
       [userId, id],
     );
 
     let liked;
-    if (existing.rows.length > 0) {
+    if (insertResult.rowCount > 0) {
+      await pool.query(
+        "UPDATE posts SET like_count = like_count + 1 WHERE id = $1",
+        [id],
+      );
+      liked = true;
+    } else {
       await pool.query(
         "DELETE FROM post_likes WHERE user_id = $1 AND post_id = $2",
         [userId, id],
@@ -419,22 +475,15 @@ const likePost = async (req, res) => {
         [id],
       );
       liked = false;
-    } else {
-      await pool.query(
-        "INSERT INTO post_likes (user_id, post_id) VALUES ($1, $2)",
-        [userId, id],
-      );
-      await pool.query(
-        "UPDATE posts SET like_count = like_count + 1 WHERE id = $1",
-        [id],
-      );
-      liked = true;
     }
 
     const { rows } = await pool.query(
       "SELECT like_count FROM posts WHERE id = $1",
       [id],
     );
+
+    await invalidatePostsCache();
+
     res.json({ liked, likeCount: rows[0]?.like_count ?? 0 });
   } catch (err) {
     logger.error("Like post error:", err);
