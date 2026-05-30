@@ -10,13 +10,23 @@ const logger = require("../utils/logger");
 
 // Token helpers
 const generateTokens = (user) => {
-  const payload = { id: user.id, email: user.email, role: user.role };
+  const jwt = require("jsonwebtoken");
+
+  const payload = {
+    id: user.id,
+    email: user.email,
+    role: user.role,
+    username: user.username,
+  };
+
   const accessToken = jwt.sign(payload, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN || "15m",
   });
+
   const refreshToken = jwt.sign(payload, process.env.JWT_REFRESH_SECRET, {
     expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || "7d",
   });
+
   return { accessToken, refreshToken };
 };
 
@@ -65,14 +75,12 @@ const register = async (req, res) => {
       [user.id, hashToken(refreshToken)],
     );
 
-    res
-      .status(201)
-      .json({
-        message: "Registration successful",
-        user,
-        accessToken,
-        refreshToken,
-      });
+    res.status(201).json({
+      message: "Registration successful",
+      user,
+      accessToken,
+      refreshToken,
+    });
   } catch (err) {
     logger.error("Register error:", err);
     res.status(500).json({ error: "Registration failed" });
@@ -289,7 +297,6 @@ const resetPassword = async (req, res) => {
 };
 
 // 2FA
-
 const setup2FA = async (req, res) => {
   const userId = req.user.id;
   try {
