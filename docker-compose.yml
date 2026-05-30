@@ -221,16 +221,3 @@ services:
       - redis
       - rabbitmq
     restart: unless-stopped
-
-  #frontend:
-   # build:
-    #  context: ./frontend
-    #container_name: blog-frontend
-   # env_file: .env
-    #ports:
-      #- "5173:5173"
-    #networks:
-     # - blog-net
-    #depends_on:
-    #  - api-gateway
-    #restart: unless-stopped
