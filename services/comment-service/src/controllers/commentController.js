@@ -1,3 +1,4 @@
+const axios = require("axios");
 const { JSDOM } = require("jsdom");
 const createDOMPurify = require("dompurify");
 const Comment = require("../models/Comment");
@@ -10,6 +11,23 @@ const DOMPurify = createDOMPurify(window);
 
 const CACHE_TTL = 60;
 const MAX_REPLIES_PREVIEW = 5;
+const POST_SERVICE_URL =
+  process.env.POST_SERVICE_URL || "http://post-service:3002";
+
+const updatePostCommentCount = async (postId, delta) => {
+  try {
+    await axios.patch(
+      `${POST_SERVICE}/internal/posts/${postId}/comment-count`,
+      { delta },
+      { timeout: 3000 },
+    );
+  } catch (err) {
+    logger.warn(
+      `Failed to update comment_count for post ${postId}:`,
+      err.message,
+    );
+  }
+};
 
 // Cache invalidation
 const invalidatePostCommentCache = async (postId) => {
@@ -66,6 +84,8 @@ const createComment = async (req, res) => {
       depth,
     });
 
+    await updatePostCommentCount(postId, 1);
+
     await invalidatePostCommentCache(postId);
 
     await publishEvent("comment.created", {
@@ -76,8 +96,6 @@ const createComment = async (req, res) => {
       content,
       postOwnerId: req.headers["x-post-owner-id"] || null,
     });
-
-    await publishEvent("comment.count.increment", { postId }).catch(() => {});
 
     res.status(201).json(comment);
   } catch (err) {
@@ -149,7 +167,7 @@ const getComments = async (req, res) => {
   }
 };
 
-//  UPDATE COMMENT
+// UPDATE COMMENT
 const updateComment = async (req, res) => {
   const authorId = req.headers["x-user-id"];
   const { id } = req.params;
@@ -203,9 +221,7 @@ const deleteComment = async (req, res) => {
       });
     }
 
-    await publishEvent("comment.count.decrement", {
-      postId: comment.postId,
-    }).catch(() => {});
+    await decrementCommentCount(comment.postId);
 
     await invalidatePostCommentCache(comment.postId);
     res.json({ message: "Comment deleted" });
