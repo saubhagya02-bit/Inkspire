@@ -12,6 +12,7 @@ const { connectRabbitMQ } = require("./utils/rabbitmq");
 const postRoutes = require("./routes/posts");
 const categoryRoutes = require("./routes/categories");
 const tagRoutes = require("./routes/tags");
+const internalRoutes = require("./routes/internal");
 
 const app = express();
 const PORT = process.env.PORT || 3002;
@@ -29,6 +30,8 @@ app.get("/health", (req, res) => {
     timestamp: new Date().toISOString(),
   });
 });
+
+app.use("/internal", internalRoutes);
 
 // Routes
 app.use("/", postRoutes);
