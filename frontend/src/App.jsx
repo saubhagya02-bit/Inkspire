@@ -11,6 +11,8 @@ import RegisterPage from "./pages/RegisterPage";
 import ProfilePage from "./pages/ProfilePage";
 import NotificationsPage from "./pages/NotificationsPage";
 import NotFoundPage from "./pages/NotFoundPage";
+import ForgotPasswordPage from "./pages/ForgotPasswordPage";
+import ResetPasswordPage from "./pages/ResetPasswordPage";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -47,6 +49,7 @@ export default function App() {
           }}
         />
         <Routes>
+          {/* Main layout routes */}
           <Route path="/" element={<Layout />}>
             <Route index element={<HomePage />} />
             <Route path="posts/:slugOrId" element={<PostPage />} />
@@ -83,6 +86,8 @@ export default function App() {
               }
             />
           </Route>
+
+          {/* Auth routes  */}
           <Route
             path="/login"
             element={
@@ -99,6 +104,24 @@ export default function App() {
               </GuestRoute>
             }
           />
+
+          <Route
+            path="/forgot-password"
+            element={
+              <GuestRoute>
+                <ForgotPasswordPage />
+              </GuestRoute>
+            }
+          />
+          <Route
+            path="/reset-password/:token"
+            element={
+              <GuestRoute>
+                <ResetPasswordPage />
+              </GuestRoute>
+            }
+          />
+
           <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </AuthProvider>
