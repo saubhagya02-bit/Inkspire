@@ -119,7 +119,7 @@ export default function PostCard({ post, onDelete }) {
   const [likeCount, setLikeCount] = useState(post.like_count || 0);
   const [liking, setLiking] = useState(false);
 
-  const [commentCount] = useState(post.comment_count || 0);
+  const commentCount = post.comment_count ?? 0;
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
