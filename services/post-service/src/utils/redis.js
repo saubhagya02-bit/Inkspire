@@ -2,10 +2,9 @@ const Redis = require("ioredis");
 const logger = require("./logger");
 
 let client;
-let isConnected = false;
 
 const connectRedis = async () => {
-  if (client && isConnected) return client;
+  if (client) return client;
 
   client = new Redis({
     host: process.env.REDIS_HOST || "redis",
@@ -16,29 +15,19 @@ const connectRedis = async () => {
     enableReadyCheck: true,
   });
 
-  client.on("connect", () => {
-    logger.info("Redis connecting...");
-  });
-
-  client.on("ready", () => {
-    isConnected = true;
-    logger.info("Redis READY (post-service)");
-  });
-
-  client.on("error", (err) => {
-    isConnected = false;
-    logger.error("Redis error:", err.message);
-  });
+  client.on("connect", () => logger.info("Redis connecting... (post-service)"));
+  client.on("ready", () => logger.info("Redis ready (post-service)"));
+  client.on("error", (err) => logger.error("Redis error:", err.message));
+  client.on("close", () => logger.warn("Redis connection closed"));
 
   await client.ping();
-
   return client;
 };
 
 const getRedis = () => {
-  if (!client || !isConnected) {
+  if (!client) {
     throw new Error(
-      "Redis not ready. Did you call connectRedis() in index.js?",
+      "Redis not initialized — call connectRedis() first in index.js",
     );
   }
   return client;
