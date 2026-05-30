@@ -25,6 +25,7 @@ app.get("/health", (req, res) =>
     timestamp: new Date().toISOString(),
   }),
 );
+
 app.use("/", notificationRoutes);
 
 app.use((err, req, res, next) => {
@@ -34,28 +35,42 @@ app.use((err, req, res, next) => {
     .json({ error: err.message || "Internal server error" });
 });
 
-// Startup
+// Startup with retry loop
 (async () => {
-  try {
-    await mongoose.connect(
-      process.env.MONGO_URI || "mongodb://mongo:27017/inkspire",
-    );
-    logger.info("MongoDB connected (notification-service)");
-
-    await connectRedis();
-
-    // Worker runs independently
-    startWorker().catch((err) =>
-      logger.error("Worker failed to start:", err.message),
-    );
-
-    app.listen(PORT, () =>
-      logger.info(`Notification Service running on port ${PORT}`),
-    );
-  } catch (err) {
-    logger.error("Service startup failed:", err);
-    process.exit(1);
+  // MongoDB
+  let mongoConnected = false;
+  while (!mongoConnected) {
+    try {
+      await mongoose.connect(
+        process.env.MONGO_URI || "mongodb://mongo:27017/inkspire_notifications",
+      );
+      logger.info("MongoDB connected (notification-service)");
+      mongoConnected = true;
+    } catch (err) {
+      logger.error("MongoDB failed, retrying in 3s...", err.message);
+      await new Promise((r) => setTimeout(r, 3000));
+    }
   }
+
+  // Redis
+  let redisConnected = false;
+  while (!redisConnected) {
+    try {
+      await connectRedis();
+      redisConnected = true;
+    } catch (err) {
+      logger.error("Redis failed, retrying in 3s...", err.message);
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
+
+  startWorker().catch((err) =>
+    logger.error("Worker failed to start:", err.message),
+  );
+
+  app.listen(PORT, () =>
+    logger.info(`Notification Service running on port ${PORT}`),
+  );
 })();
 
 module.exports = app;
