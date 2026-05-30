@@ -1,16 +1,17 @@
 const amqplib = require("amqplib");
+const axios = require("axios");
 const Notification = require("../models/Notification");
 const { sendEmail } = require("../utils/mailer");
 const logger = require("../utils/logger");
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+const POST_SERVICE = process.env.POST_SERVICE_URL || "http://post-service:3002";
 const QUEUE = "notification.worker";
 
 let channel;
 let reconnecting = false;
 
-// Event handlers
-
+// Event Handlers
 async function handleUserRegistered(payload) {
   const { userId, email, username, verifyToken } = payload;
   const verifyUrl = `${FRONTEND_URL}/verify-email/${verifyToken}`;
@@ -20,7 +21,7 @@ async function handleUserRegistered(payload) {
     type: "welcome",
     title: `Welcome to InkSpire, ${username}!`,
     body: "Your account is ready. Start writing your first post!",
-    actionUrl: "/dashboard",
+    actionUrl: "/",
     channels: { inApp: true, email: true },
   });
 
@@ -44,7 +45,7 @@ async function handleUserRegistered(payload) {
 }
 
 async function handlePasswordReset(payload) {
-  const { userId, email, resetToken } = payload;
+  const { email, resetToken } = payload;
   const resetUrl = `${FRONTEND_URL}/reset-password/${resetToken}`;
 
   await sendEmail({
@@ -54,11 +55,11 @@ async function handlePasswordReset(payload) {
     templateData: { resetUrl },
   }).catch((err) => logger.error("Password reset email failed:", err.message));
 
-  logger.info(`Handled password reset for userId=${userId}`);
+  logger.info(`Handled password reset for ${email}`);
 }
 
 async function handlePostPublished(payload) {
-  const { postId, title, authorId, slug } = payload;
+  const { postId, title, authorId, slug, excerpt } = payload;
   const postUrl = `${FRONTEND_URL}/posts/${slug}`;
 
   await Notification.create({
@@ -80,28 +81,62 @@ async function handleCommentCreated(payload) {
   const { commentId, postId, postOwnerId, authorId, authorUsername, content } =
     payload;
 
-  // Only notify if the commenter is not the post owner
-  if (postOwnerId && postOwnerId !== authorId) {
-    await Notification.create({
-      userId: postOwnerId,
-      type: "comment_on_post",
-      title: `${authorUsername} commented on your post`,
-      body: content.length > 100 ? content.substring(0, 100) + "..." : content,
-      actorId: authorId,
-      actorUsername: authorUsername,
-      refId: postId,
-      refType: "post",
-      actionUrl: `/posts/${postId}#comment-${commentId}`,
-      channels: { inApp: true },
-    });
+  // Only notify if commenter is NOT the post owner
+  if (!postOwnerId || postOwnerId === authorId) {
+    logger.info(
+      `Skipping comment notification: commenter is post owner or postOwnerId missing`,
+    );
+    return;
   }
 
-  logger.info(
-    `Handled comment.created commentId=${commentId} on postId=${postId}`,
-  );
+  const truncatedContent =
+    content.length > 100 ? content.substring(0, 100) + "..." : content;
+
+  await Notification.create({
+    userId: postOwnerId,
+    type: "comment_on_post",
+    title: `${authorUsername} commented on your post`,
+    body: truncatedContent,
+    actorId: authorId,
+    actorUsername: authorUsername,
+    refId: postId,
+    refType: "post",
+    actionUrl: `/posts/${postId}#comment-${commentId}`,
+    channels: { inApp: true },
+  });
+
+  logger.info(`Comment notification created for postOwner=${postOwnerId}`);
 }
 
-//  Bindings
+async function handleCommentCountIncrement(payload) {
+  const { postId } = payload;
+  try {
+    await axios.patch(`${POST_SERVICE}/posts/${postId}/comment-count`, {
+      delta: 1,
+    });
+  } catch (err) {
+    logger.warn(
+      `Failed to increment comment_count for post ${postId}:`,
+      err.message,
+    );
+  }
+}
+
+async function handleCommentCountDecrement(payload) {
+  const { postId } = payload;
+  try {
+    await axios.patch(`${POST_SERVICE}/posts/${postId}/comment-count`, {
+      delta: -1,
+    });
+  } catch (err) {
+    logger.warn(
+      `Failed to decrement comment_count for post ${postId}:`,
+      err.message,
+    );
+  }
+}
+
+// Bindings
 const BINDINGS = [
   {
     exchange: "user.events",
@@ -123,6 +158,16 @@ const BINDINGS = [
     pattern: "comment.created",
     handler: handleCommentCreated,
   },
+  {
+    exchange: "comment.events",
+    pattern: "comment.count.increment",
+    handler: handleCommentCountIncrement,
+  },
+  {
+    exchange: "comment.events",
+    pattern: "comment.count.decrement",
+    handler: handleCommentCountDecrement,
+  },
 ];
 
 // Worker setup
@@ -136,16 +181,10 @@ const startWorker = async () => {
       channel = await conn.createChannel();
       channel.prefetch(10);
 
-      for (const { exchange, pattern } of BINDINGS) {
+      const exchanges = [...new Set(BINDINGS.map((b) => b.exchange))];
+      for (const exchange of exchanges) {
         await channel.assertExchange(exchange, "topic", { durable: true });
       }
-
-      await channel.assertQueue(QUEUE, {
-        durable: true,
-        arguments: {
-          "x-dead-letter-exchange": "dlx.notifications",
-        },
-      });
 
       await channel.assertExchange("dlx.notifications", "topic", {
         durable: true,
@@ -153,9 +192,14 @@ const startWorker = async () => {
       await channel.assertQueue("dead.notifications", { durable: true });
       await channel.bindQueue("dead.notifications", "dlx.notifications", "#");
 
+      await channel.assertQueue(QUEUE, {
+        durable: true,
+        arguments: { "x-dead-letter-exchange": "dlx.notifications" },
+      });
+
       for (const { exchange, pattern } of BINDINGS) {
         await channel.bindQueue(QUEUE, exchange, pattern);
-        logger.info(`Bound ${QUEUE} to ${exchange} [${pattern}]`);
+        logger.info(`Bound ${QUEUE} ← ${exchange} [${pattern}]`);
       }
 
       channel.consume(
@@ -178,10 +222,11 @@ const startWorker = async () => {
             channel.ack(msg);
           } catch (err) {
             logger.error(
-              `Message processing failed for ${routingKey}:`,
+              `Message processing failed [${routingKey}]:`,
               err.message,
             );
 
+            // Retry up to 3× with exponential back-off; then dead-letter
             const retryCount =
               (msg.properties.headers?.["x-retry-count"] || 0) + 1;
             if (retryCount < 3) {
@@ -193,7 +238,7 @@ const startWorker = async () => {
                 }
               }, retryCount * 2000);
             } else {
-              channel.nack(msg, false, false);
+              channel.nack(msg, false, false); // → DLQ
             }
           }
         },
@@ -217,7 +262,8 @@ const startWorker = async () => {
       return;
     } catch (err) {
       logger.warn(
-        `RabbitMQ worker connection failed, retrying... (${retries} left): ${err.message}`,
+        `RabbitMQ worker connect failed (${retries} retries left):`,
+        err.message,
       );
       await new Promise((r) => setTimeout(r, 4000));
     }
