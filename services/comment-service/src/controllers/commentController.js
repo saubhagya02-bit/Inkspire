@@ -74,11 +74,10 @@ const createComment = async (req, res) => {
       authorId,
       authorUsername,
       content,
-
       postOwnerId: req.headers["x-post-owner-id"] || null,
     });
 
-    await publishEvent("comment.count.increment", { postId });
+    await publishEvent("comment.count.increment", { postId }).catch(() => {});
 
     res.status(201).json(comment);
   } catch (err) {
@@ -150,7 +149,7 @@ const getComments = async (req, res) => {
   }
 };
 
-// UPDATE COMMENT
+//  UPDATE COMMENT
 const updateComment = async (req, res) => {
   const authorId = req.headers["x-user-id"];
   const { id } = req.params;
@@ -162,9 +161,8 @@ const updateComment = async (req, res) => {
     if (comment.authorId !== authorId)
       return res.status(403).json({ error: "Not authorized" });
 
-    const contentHtml = DOMPurify.sanitize(content.replace(/\n/g, "<br>"));
     comment.content = content;
-    comment.contentHtml = contentHtml;
+    comment.contentHtml = DOMPurify.sanitize(content.replace(/\n/g, "<br>"));
     comment.isEdited = true;
     comment.editedAt = new Date();
     await comment.save();
@@ -205,7 +203,9 @@ const deleteComment = async (req, res) => {
       });
     }
 
-    await publishEvent("comment.count.decrement", { postId: comment.postId });
+    await publishEvent("comment.count.decrement", {
+      postId: comment.postId,
+    }).catch(() => {});
 
     await invalidatePostCommentCache(comment.postId);
     res.json({ message: "Comment deleted" });
@@ -216,7 +216,6 @@ const deleteComment = async (req, res) => {
 };
 
 // REACT TO COMMENT
-
 const reactToComment = async (req, res) => {
   const userId = req.headers["x-user-id"];
   const { id } = req.params;
@@ -230,10 +229,9 @@ const reactToComment = async (req, res) => {
     const comment = await Comment.findById(id);
     if (!comment) return res.status(404).json({ error: "Comment not found" });
 
-    const existingReaction = comment.reactions.find((r) => r.userId === userId);
-
-    if (existingReaction) {
-      if (existingReaction.type === type) {
+    const existing = comment.reactions.find((r) => r.userId === userId);
+    if (existing) {
+      if (existing.type === type) {
         comment.reactions = comment.reactions.filter(
           (r) => r.userId !== userId,
         );
@@ -242,11 +240,11 @@ const reactToComment = async (req, res) => {
           (comment.reactionCounts[type] || 0) - 1,
         );
       } else {
-        comment.reactionCounts[existingReaction.type] = Math.max(
+        comment.reactionCounts[existing.type] = Math.max(
           0,
-          (comment.reactionCounts[existingReaction.type] || 0) - 1,
+          (comment.reactionCounts[existing.type] || 0) - 1,
         );
-        existingReaction.type = type;
+        existing.type = type;
         comment.reactionCounts[type] = (comment.reactionCounts[type] || 0) + 1;
       }
     } else {
@@ -256,7 +254,6 @@ const reactToComment = async (req, res) => {
 
     comment.markModified("reactionCounts");
     await comment.save();
-
     await invalidatePostCommentCache(comment.postId);
 
     res.json({ reactionCounts: comment.reactionCounts });
