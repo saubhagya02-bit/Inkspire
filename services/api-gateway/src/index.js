@@ -20,10 +20,10 @@ const redis = new Redis({
   lazyConnect: true,
   retryStrategy: (times) => Math.min(times * 50, 2000),
 });
-redis.on("connect", () => logger.info("Redis connected (gateway)"));
-redis.on("error", (err) => logger.warn("Redis error (gateway):", err.message));
+redis.on("connect", () => logger.info("Redis connected"));
+redis.on("error", (err) => logger.warn("Redis warn:", err.message));
 
-// Service URLs
+// Service map
 const SERVICES = {
   auth: process.env.AUTH_SERVICE_URL || "http://auth-service:3001",
   posts: process.env.POST_SERVICE_URL || "http://post-service:3002",
@@ -42,7 +42,6 @@ const allowedOrigins = (
   process.env.FRONTEND_URL ||
   "http://localhost:5173"
 ).split(",");
-
 app.use(
   cors({
     origin: (origin, cb) => {
@@ -57,7 +56,6 @@ app.use(morgan("dev"));
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// Request ID
 app.use((req, res, next) => {
   req.requestId = req.headers["x-request-id"] || uuidv4();
   res.setHeader("X-Request-ID", req.requestId);
@@ -68,31 +66,20 @@ app.use((req, res, next) => {
 const requireAuth = async (req, res, next) => {
   const header = req.headers["authorization"];
   const token = header?.startsWith("Bearer ") ? header.slice(7) : null;
-
-  if (!token) {
-    return res
-      .status(401)
-      .json({ error: "Access token required", code: "NO_TOKEN" });
-  }
-
+  if (!token) return res.status(401).json({ error: "Access token required" });
   try {
     const blacklisted = await redis.get("blacklist:" + token).catch(() => null);
-    if (blacklisted) {
-      return res
-        .status(401)
-        .json({ error: "Token invalidated", code: "TOKEN_INVALID" });
-    }
+    if (blacklisted)
+      return res.status(401).json({ error: "Token invalidated" });
     req.user = jwt.verify(token, process.env.JWT_SECRET);
     next();
   } catch (err) {
-    if (err.name === "TokenExpiredError") {
-      return res
-        .status(401)
-        .json({ error: "Token expired", code: "TOKEN_EXPIRED" });
-    }
-    return res
-      .status(401)
-      .json({ error: "Invalid token", code: "TOKEN_INVALID" });
+    return res.status(401).json({
+      error:
+        err.name === "TokenExpiredError" ? "Token expired" : "Invalid token",
+      code:
+        err.name === "TokenExpiredError" ? "TOKEN_EXPIRED" : "INVALID_TOKEN",
+    });
   }
 };
 
@@ -103,18 +90,17 @@ const forward = (baseUrl, stripPrefix) => async (req, res) => {
     : req.originalUrl;
 
   const target = baseUrl + suffix;
-  logger.info(`→ ${req.method} ${req.originalUrl}  ⟶  ${target}`);
+  logger.info(`Forwarding: ${req.method} ${req.originalUrl} → ${target}`);
 
   try {
     const headers = {
       "content-type": req.headers["content-type"] || "application/json",
       "x-request-id": req.requestId,
     };
-
     if (req.user) {
       headers["x-user-id"] = String(req.user.id);
-      headers["x-user-role"] = req.user.role || "user";
-      headers["x-user-email"] = req.user.email || "";
+      headers["x-user-role"] = req.user.role;
+      headers["x-user-email"] = req.user.email;
       headers["x-user-username"] = req.user.username || "";
     }
 
@@ -150,47 +136,32 @@ app.get("/health", (req, res) =>
 );
 
 // Routes
-app.use("/api/auth", forward(SERVICES.auth, "/api/auth"));
+app.all("/api/auth/*", forward(SERVICES.auth, "/api/auth"));
 
-app.use("/api/posts", (req, res, next) => {
-  if (req.method === "GET") {
-    const header = req.headers["authorization"];
-    const token = header?.startsWith("Bearer ") ? header.slice(7) : null;
-    if (token) {
-      try {
-        const blacklisted = redis.get("blacklist:" + token);
-        req.user = jwt.verify(token, process.env.JWT_SECRET);
-      } catch {}
-    }
-    return forward(SERVICES.posts, "/api/posts")(req, res, next);
-  }
+// Posts — public reads, auth required for writes
+app.get("/api/posts", forward(SERVICES.posts, "/api/posts"));
+app.get("/api/posts/*", forward(SERVICES.posts, "/api/posts"));
+app.all("/api/posts", requireAuth, forward(SERVICES.posts, "/api/posts"));
+app.all("/api/posts/*", requireAuth, forward(SERVICES.posts, "/api/posts"));
 
-  requireAuth(req, res, () =>
-    forward(SERVICES.posts, "/api/posts")(req, res, next),
-  );
-});
+app.get("/api/comments/*", forward(SERVICES.comments, "/api/comments"));
 
-app.use("/api/comments", (req, res, next) => {
-  if (req.method === "GET") {
-    return forward(SERVICES.comments, "/api/comments")(req, res, next);
-  }
-  requireAuth(req, res, () =>
-    forward(SERVICES.comments, "/api/comments")(req, res, next),
-  );
-});
-
-app.use("/api/media", requireAuth, forward(SERVICES.media, "/api/media"));
-
-app.use(
-  "/api/notifications",
+app.all(
+  "/api/comments/*",
+  requireAuth,
+  forward(SERVICES.comments, "/api/comments"),
+);
+app.all("/api/media/*", requireAuth, forward(SERVICES.media, "/api/media"));
+app.all(
+  "/api/notifications/*",
   requireAuth,
   forward(SERVICES.notifications, "/api/notifications"),
 );
 
-// 404
+// 404 catch-all
 app.use((req, res) =>
   res.status(404).json({ error: `Route not found: ${req.method} ${req.path}` }),
 );
 
-app.listen(PORT, () => logger.info(`API Gateway running on port ${PORT}`));
+app.listen(PORT, () => logger.info("API Gateway running on port " + PORT));
 module.exports = app;
