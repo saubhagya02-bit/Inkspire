@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { notificationsApi } from "../lib/api";
 import { Button, PageLoader, Empty } from "../components/ui";
 import { formatDistanceToNow } from "date-fns";
@@ -23,7 +23,7 @@ export default function NotificationsPage() {
   const [marking, setMarking] = useState(false);
   const [unreadOnly, setUnreadOnly] = useState(false);
 
-  const fetch = async () => {
+  const fetchNotifications = useCallback(async () => {
     try {
       const { data } = await notificationsApi.list({
         limit: 50,
@@ -35,12 +35,17 @@ export default function NotificationsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [unreadOnly]);
 
   useEffect(() => {
     setLoading(true);
-    fetch();
-  }, [unreadOnly]);
+    fetchNotifications();
+  }, [fetchNotifications]);
+
+  useEffect(() => {
+    const interval = setInterval(fetchNotifications, 30000);
+    return () => clearInterval(interval);
+  }, [fetchNotifications]);
 
   const markAllRead = async () => {
     setMarking(true);
@@ -118,9 +123,8 @@ export default function NotificationsPage() {
           )}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {/* Unread filter toggle */}
           <button
-            onClick={() => setUnreadOnly(!unreadOnly)}
+            onClick={() => setUnreadOnly((v) => !v)}
             style={{
               padding: "5px 14px",
               borderRadius: 20,
@@ -129,6 +133,7 @@ export default function NotificationsPage() {
               color: unreadOnly ? "var(--text)" : "var(--text-tertiary)",
               border: `1px solid ${unreadOnly ? "var(--border)" : "transparent"}`,
               transition: "all 0.2s",
+              cursor: "pointer",
             }}
           >
             Unread only
@@ -153,7 +158,11 @@ export default function NotificationsPage() {
         <Empty
           icon="🔔"
           title="You're all caught up"
-          description="No notifications to show."
+          description={
+            unreadOnly
+              ? "No unread notifications."
+              : "No notifications to show."
+          }
         />
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -190,7 +199,7 @@ function NotifItem({ notif, onRead, onDelete }) {
       }}
       onClick={() => !notif.isRead && onRead()}
     >
-      {/* Unread dot */}
+      {/* Unread indicator */}
       {!notif.isRead && (
         <div
           style={{
@@ -237,6 +246,7 @@ function NotifItem({ notif, onRead, onDelete }) {
         >
           {notif.title}
         </div>
+
         {notif.body && (
           <div
             style={{
@@ -271,7 +281,6 @@ function NotifItem({ notif, onRead, onDelete }) {
               fontSize: 12,
               background: "var(--ink-muted)",
               color: "var(--text-secondary)",
-              transition: "color 0.15s",
             }}
           >
             View
@@ -289,6 +298,7 @@ function NotifItem({ notif, onRead, onDelete }) {
             background: "none",
             color: "var(--text-tertiary)",
             transition: "color 0.15s",
+            cursor: "pointer",
           }}
           onMouseEnter={(e) => (e.target.style.color = "var(--accent)")}
           onMouseLeave={(e) => (e.target.style.color = "var(--text-tertiary)")}
