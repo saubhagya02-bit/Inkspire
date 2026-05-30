@@ -40,12 +40,24 @@ function PostEditor({ initial, isEdit }) {
       toast.error("Content is required");
       return;
     }
+
     setSaving(true);
     try {
-      const payload = { ...form, status };
+      const payload = {
+        title: form.title,
+        content: form.content,
+        excerpt: form.excerpt,
+        status,
+        visibility: form.visibility,
+        coverImageUrl: form.coverImageUrl,
+        seoTitle: form.seoTitle,
+        seoDescription: form.seoDescription,
+      };
+
       const { data } = isEdit
         ? await postsApi.update(initial.id, payload)
         : await postsApi.create(payload);
+
       toast.success(status === "published" ? "Post published!" : "Draft saved");
       navigate(`/posts/${data.slug || data.id}`);
     } catch (err) {
@@ -54,6 +66,8 @@ function PostEditor({ initial, isEdit }) {
       setSaving(false);
     }
   };
+
+  const wordCount = form.content.trim().split(/\s+/).filter(Boolean).length;
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto", padding: "2rem 1.5rem" }}>
@@ -91,7 +105,7 @@ function PostEditor({ initial, isEdit }) {
         </div>
       </div>
 
-      {/* Title */}
+      {/* Title input */}
       <textarea
         value={form.title}
         onChange={set("title")}
@@ -111,6 +125,7 @@ function PostEditor({ initial, isEdit }) {
           marginBottom: "1.5rem",
           resize: "none",
           letterSpacing: "-0.02em",
+          outline: "none",
         }}
         onFocus={(e) => (e.target.style.borderBottomColor = "var(--border)")}
         onBlur={(e) =>
@@ -118,7 +133,7 @@ function PostEditor({ initial, isEdit }) {
         }
       />
 
-      {/* Tabs */}
+      {/* Tab bar */}
       <div
         style={{
           display: "flex",
@@ -134,6 +149,7 @@ function PostEditor({ initial, isEdit }) {
             style={{
               padding: "8px 16px",
               background: "none",
+              border: "none",
               fontSize: 13,
               color: tab === t ? "var(--text)" : "var(--text-tertiary)",
               borderBottom:
@@ -141,6 +157,7 @@ function PostEditor({ initial, isEdit }) {
               marginBottom: -1,
               textTransform: "capitalize",
               transition: "color 0.2s",
+              cursor: "pointer",
             }}
           >
             {t}
@@ -148,7 +165,7 @@ function PostEditor({ initial, isEdit }) {
         ))}
       </div>
 
-      {/* Write */}
+      {/* Write tab */}
       {tab === "write" && (
         <textarea
           value={form.content}
@@ -166,13 +183,14 @@ function PostEditor({ initial, isEdit }) {
             fontFamily: "'DM Mono', 'Fira Code', monospace",
             lineHeight: 1.8,
             resize: "vertical",
+            outline: "none",
           }}
           onFocus={(e) => (e.target.style.borderColor = "var(--blue)")}
           onBlur={(e) => (e.target.style.borderColor = "var(--border)")}
         />
       )}
 
-      {/* Preview */}
+      {/* Preview tab */}
       {tab === "preview" && (
         <div
           style={{
@@ -204,7 +222,7 @@ function PostEditor({ initial, isEdit }) {
         </div>
       )}
 
-      {/* Settings */}
+      {/* Settings tab */}
       {tab === "settings" && (
         <div
           style={{
@@ -221,11 +239,12 @@ function PostEditor({ initial, isEdit }) {
             placeholder="A short summary shown in the feed..."
             rows={3}
           />
+
           <Input
             label="Cover image URL"
             value={form.coverImageUrl}
             onChange={set("coverImageUrl")}
-            placeholder="https://..."
+            placeholder="https://images.unsplash.com/..."
           />
           {form.coverImageUrl && (
             <img
@@ -235,9 +254,14 @@ function PostEditor({ initial, isEdit }) {
                 borderRadius: "var(--radius)",
                 maxHeight: 200,
                 objectFit: "cover",
+                width: "100%",
+              }}
+              onError={(e) => {
+                e.target.style.display = "none";
               }}
             />
           )}
+
           <div>
             <label
               style={{
@@ -267,6 +291,7 @@ function PostEditor({ initial, isEdit }) {
               <option value="archived">Archived</option>
             </select>
           </div>
+
           <div>
             <label
               style={{
@@ -295,6 +320,7 @@ function PostEditor({ initial, isEdit }) {
               <option value="private">Private</option>
             </select>
           </div>
+
           <Input
             label="SEO Title"
             value={form.seoTitle}
@@ -320,11 +346,7 @@ function PostEditor({ initial, isEdit }) {
           textAlign: "right",
         }}
       >
-        {form.content.trim().split(/\s+/).filter(Boolean).length} words ·{" "}
-        {Math.ceil(
-          form.content.trim().split(/\s+/).filter(Boolean).length / 200,
-        ) || 0}{" "}
-        min read
+        {wordCount} words · {Math.ceil(wordCount / 200) || 0} min read
       </div>
     </div>
   );
