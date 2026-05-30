@@ -34,8 +34,6 @@ const connectDB = async () => {
         slug VARCHAR(100) UNIQUE NOT NULL
       );
 
-      -- FIX: added author_username column so getPosts can show who wrote the post
-      -- without a cross-DB join we store a denormalized copy updated on write
       CREATE TABLE IF NOT EXISTS posts (
         id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         title           VARCHAR(500) NOT NULL,
@@ -63,6 +61,9 @@ const connectDB = async () => {
         updated_at      TIMESTAMPTZ DEFAULT NOW()
       );
 
+      -- FIX: migration for existing tables that don't have author_username yet
+      ALTER TABLE posts ADD COLUMN IF NOT EXISTS author_username VARCHAR(100);
+
       CREATE TABLE IF NOT EXISTS post_tags (
         post_id UUID    REFERENCES posts(id) ON DELETE CASCADE,
         tag_id  INTEGER REFERENCES tags(id)  ON DELETE CASCADE,
@@ -77,25 +78,23 @@ const connectDB = async () => {
       );
 
       CREATE TABLE IF NOT EXISTS post_revisions (
-        id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        post_id   UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-        title     VARCHAR(500),
-        content   TEXT,
-        author_id UUID NOT NULL,
+        id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        post_id    UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+        title      VARCHAR(500),
+        content    TEXT,
+        author_id  UUID NOT NULL,
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
 
-      -- Indexes
-      CREATE INDEX IF NOT EXISTS idx_posts_author     ON posts(author_id);
-      CREATE INDEX IF NOT EXISTS idx_posts_status     ON posts(status);
-      CREATE INDEX IF NOT EXISTS idx_posts_slug       ON posts(slug);
-      CREATE INDEX IF NOT EXISTS idx_posts_published  ON posts(published_at DESC)
-                                                       WHERE status = 'published';
-      CREATE INDEX IF NOT EXISTS idx_posts_category   ON posts(category_id);
-      CREATE INDEX IF NOT EXISTS idx_post_likes_user  ON post_likes(user_id);
+      CREATE INDEX IF NOT EXISTS idx_posts_author    ON posts(author_id);
+      CREATE INDEX IF NOT EXISTS idx_posts_status    ON posts(status);
+      CREATE INDEX IF NOT EXISTS idx_posts_slug      ON posts(slug);
+      CREATE INDEX IF NOT EXISTS idx_posts_published ON posts(published_at DESC)
+                                                      WHERE status = 'published';
+      CREATE INDEX IF NOT EXISTS idx_posts_category  ON posts(category_id);
+      CREATE INDEX IF NOT EXISTS idx_post_likes_user ON post_likes(user_id);
     `);
 
-    // Seed default categories
     await client.query(`
       INSERT INTO categories (name, slug, description) VALUES
         ('Technology', 'technology', 'Tech articles and tutorials'),
