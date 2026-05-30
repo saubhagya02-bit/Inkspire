@@ -9,6 +9,7 @@ const logger = require("./utils/logger");
 const { connectRedis } = require("./utils/redis");
 const { connectRabbitMQ } = require("./utils/rabbitmq");
 const commentRoutes = require("./routes/comments");
+const syncRoutes       = require("./routes/sync");
 
 const app = express();
 const PORT = process.env.PORT || 3003;
@@ -25,6 +26,9 @@ app.get("/health", (req, res) =>
     timestamp: new Date().toISOString(),
   }),
 );
+
+app.use("/sync", syncRoutes);
+
 app.use("/", commentRoutes);
 app.use((err, req, res, next) => {
   logger.error("Comment service error:", err);
