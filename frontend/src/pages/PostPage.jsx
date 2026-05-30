@@ -18,6 +18,8 @@ export default function PostPage() {
   const [liked, setLiked] = useState(false);
   const [likeCount, setLikeCount] = useState(0);
   const [liking, setLiking] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     postsApi
@@ -56,13 +58,17 @@ export default function PostPage() {
   };
 
   const handleDelete = async () => {
-    if (!confirm("Delete this post permanently?")) return;
+    setDeleting(true);
+
     try {
       await postsApi.delete(post.id);
-      toast.success("Post deleted");
+      toast.success("Post deleted successfully");
       navigate("/");
     } catch (err) {
-      toast.error(err.response?.data?.error || "Failed to delete");
+      toast.error(err.response?.data?.error || "Failed to delete post");
+    } finally {
+      setDeleting(false);
+      setShowDeleteConfirm(false);
     }
   };
 
@@ -220,9 +226,87 @@ export default function PostPage() {
                 </Button>
               </Link>
             )}
-            <Button variant="danger" size="sm" onClick={handleDelete}>
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={() => setShowDeleteConfirm(true)}
+            >
               Delete
             </Button>
+
+            {showDeleteConfirm && (
+              <div
+                style={{
+                  position: "fixed",
+                  inset: 0,
+                  background: "rgba(0,0,0,0.55)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  zIndex: 9999,
+                  backdropFilter: "blur(4px)",
+                }}
+              >
+                <div
+                  style={{
+                    width: "100%",
+                    maxWidth: 420,
+                    background: "var(--ink-soft)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius-lg)",
+                    padding: "24px",
+                    boxShadow: "var(--shadow-lg)",
+                  }}
+                >
+                  <h3
+                    style={{
+                      margin: 0,
+                      marginBottom: 10,
+                      fontSize: 18,
+                      fontWeight: 600,
+                    }}
+                  >
+                    Delete Post
+                  </h3>
+
+                  <p
+                    style={{
+                      margin: 0,
+                      marginBottom: 20,
+                      color: "var(--text-secondary)",
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    Are you sure you want to delete this post? This action
+                    cannot be undone.
+                  </p>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "flex-end",
+                      gap: 10,
+                    }}
+                  >
+                    <Button
+                      variant="secondary"
+                      onClick={() => setShowDeleteConfirm(false)}
+                      disabled={deleting}
+                    >
+                      Cancel
+                    </Button>
+
+                    <Button
+                      variant="danger"
+                      onClick={handleDelete}
+                      disabled={deleting}
+                    >
+                      {deleting ? "Deleting..." : "Delete"}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
