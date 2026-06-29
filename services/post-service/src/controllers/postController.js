@@ -443,24 +443,32 @@ const likePost = async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.headers["x-user-id"];
+    const username =
+      req.headers["x-user-username"] ||
+      req.headers["x-user-email"]?.split("@")[0] ||
+      "Someone";
+
     if (!userId)
       return res.status(401).json({ error: "Authentication required" });
 
-    const insertResult = await pool.query(
-      `INSERT INTO post_likes (user_id, post_id)
-       VALUES ($1, $2)
-       ON CONFLICT (user_id, post_id) DO NOTHING`,
+    // Get post details (need author_id for notification)
+    const postResult = await pool.query(
+      "SELECT id, title, author_id, slug FROM posts WHERE id = $1",
+      [id],
+    );
+    if (!postResult.rows.length) {
+      return res.status(404).json({ error: "Post not found" });
+    }
+    const post = postResult.rows[0];
+
+    const existing = await pool.query(
+      "SELECT 1 FROM post_likes WHERE user_id = $1 AND post_id = $2",
       [userId, id],
     );
 
     let liked;
-    if (insertResult.rowCount > 0) {
-      await pool.query(
-        "UPDATE posts SET like_count = like_count + 1 WHERE id = $1",
-        [id],
-      );
-      liked = true;
-    } else {
+    if (existing.rows.length > 0) {
+      // Unlike
       await pool.query(
         "DELETE FROM post_likes WHERE user_id = $1 AND post_id = $2",
         [userId, id],
@@ -470,21 +478,43 @@ const likePost = async (req, res) => {
         [id],
       );
       liked = false;
+    } else {
+      // Like
+      await pool.query(
+        "INSERT INTO post_likes (user_id, post_id) VALUES ($1, $2)",
+        [userId, id],
+      );
+      await pool.query(
+        "UPDATE posts SET like_count = like_count + 1 WHERE id = $1",
+        [id],
+      );
+      liked = true;
+
+      // Notify post author (only when liking, not unliking and not own post)
+      if (post.author_id !== userId) {
+        await publishEvent("post.liked", {
+          postId: post.id,
+          postTitle: post.title,
+          postSlug: post.slug,
+          authorId: post.author_id,
+          likerId: userId,
+          likerUsername: username,
+        }).catch((err) => logger.warn("post.liked event failed:", err.message));
+      }
     }
 
     const { rows } = await pool.query(
       "SELECT like_count FROM posts WHERE id = $1",
       [id],
     );
-
-    await invalidatePostsCache();
-
     res.json({ liked, likeCount: rows[0]?.like_count ?? 0 });
   } catch (err) {
     logger.error("Like post error:", err);
     res.status(500).json({ error: "Failed to like post" });
   }
 };
+
+module.exports = { likePost };
 
 module.exports = {
   createPost,
