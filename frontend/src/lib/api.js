@@ -5,14 +5,12 @@ const api = axios.create({
   timeout: 15000,
 });
 
-// Attach token to every request
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("accessToken");
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
 
-// Auto-refresh on 401
 let refreshing = false;
 let refreshQueue = [];
 
@@ -66,10 +64,20 @@ export const authApi = {
   refresh: (data) => api.post("/auth/refresh", data),
   me: () => api.get("/auth/users/me"),
   updateMe: (data) => api.patch("/auth/users/me", data),
+  getUser: (id) => api.get(`/auth/users/${id}`),
   forgotPassword: (data) => api.post("/auth/forgot-password", data),
   resetPassword: (token, data) =>
     api.post(`/auth/reset-password/${token}`, data),
   verifyEmail: (token) => api.get(`/auth/verify-email/${token}`),
+};
+
+// Follow
+export const followApi = {
+  follow: (userId) => api.post(`/auth/users/${userId}/follow`),
+  unfollow: (userId) => api.delete(`/auth/users/${userId}/follow`),
+  status: (userId) => api.get(`/auth/users/${userId}/follow-status`),
+  followers: (userId) => api.get(`/auth/users/${userId}/followers`),
+  following: (userId) => api.get(`/auth/users/${userId}/following`),
 };
 
 // Posts
