@@ -6,6 +6,8 @@ const {
   upload,
   s3Client,
   BUCKET,
+  checkFileSize,
+  uploadBufferToS3,
   deleteFromS3,
   getPublicUrl,
 } = require("../utils/s3");
@@ -18,7 +20,6 @@ const THUMBNAIL_SIZES = {
 };
 
 // Thumbnail generation
-
 const generateThumbnails = async (buffer, originalKey) => {
   const thumbnails = [];
   const basePath = originalKey.replace(/\.[^/.]+$/, "");
@@ -58,7 +59,6 @@ const generateThumbnails = async (buffer, originalKey) => {
 };
 
 // Tag normalizer
-
 const normalizeTags = (tags) => {
   if (!tags) return [];
   if (Array.isArray(tags))
@@ -69,6 +69,10 @@ const normalizeTags = (tags) => {
     .filter(Boolean);
 };
 
+const errorBody = (fallbackMessage, err) => ({
+  error: process.env.NODE_ENV === "production" ? fallbackMessage : err.message,
+});
+
 // Upload single file
 const uploadFile = [
   upload.single("file"),
@@ -76,15 +80,24 @@ const uploadFile = [
     try {
       if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
+      checkFileSize(req.file);
+
       const uploaderId = req.headers["x-user-id"];
       const { altText, caption, tags } = req.body;
       const file = req.file;
+
+      // Upload original to S3/MinIO
+      const { key, location } = await uploadBufferToS3(
+        file.buffer,
+        file.mimetype,
+        file.originalname,
+        uploaderId,
+      );
 
       let metadata = { width: null, height: null, format: null };
       let thumbnails = [];
 
       if (
-        file.buffer &&
         file.mimetype.startsWith("image/") &&
         file.mimetype !== "image/svg+xml"
       ) {
@@ -95,7 +108,7 @@ const uploadFile = [
             height: imgMeta.height,
             format: imgMeta.format,
           };
-          thumbnails = await generateThumbnails(file.buffer, file.key);
+          thumbnails = await generateThumbnails(file.buffer, key);
         } catch (err) {
           logger.warn(`Image processing failed: ${err.message}`);
         }
@@ -104,12 +117,12 @@ const uploadFile = [
       const media = await Media.create({
         uploaderId,
         originalName: file.originalname,
-        fileName: file.key?.split("/").pop() || file.originalname,
+        fileName: key.split("/").pop(),
         mimeType: file.mimetype,
         size: file.size,
-        s3Key: file.key,
+        s3Key: key,
         s3Bucket: BUCKET,
-        url: file.location || getPublicUrl(file.key),
+        url: location,
         ...metadata,
         thumbnails,
         altText: altText || "",
@@ -119,8 +132,8 @@ const uploadFile = [
 
       res.status(201).json(media);
     } catch (err) {
-      logger.error("Upload error:", err);
-      res.status(500).json({ error: "Upload failed" });
+      logger.error("Upload error:", { message: err.message, stack: err.stack });
+      res.status(500).json(errorBody("Upload failed", err));
     }
   },
 ];
@@ -133,26 +146,38 @@ const uploadMultiple = [
       if (!req.files?.length)
         return res.status(400).json({ error: "No files uploaded" });
 
+      req.files.forEach(checkFileSize);
+
       const uploaderId = req.headers["x-user-id"];
+
       const savedMedia = await Promise.all(
-        req.files.map((file) =>
-          Media.create({
+        req.files.map(async (file) => {
+          const { key, location } = await uploadBufferToS3(
+            file.buffer,
+            file.mimetype,
+            file.originalname,
+            uploaderId,
+          );
+          return Media.create({
             uploaderId,
             originalName: file.originalname,
-            fileName: file.key?.split("/").pop(),
+            fileName: key.split("/").pop(),
             mimeType: file.mimetype,
             size: file.size,
-            s3Key: file.key,
+            s3Key: key,
             s3Bucket: BUCKET,
-            url: file.location || getPublicUrl(file.key),
-          }),
-        ),
+            url: location,
+          });
+        }),
       );
 
       res.status(201).json(savedMedia);
     } catch (err) {
-      logger.error("Multi-upload error:", err);
-      res.status(500).json({ error: "Upload failed" });
+      logger.error("Multi-upload error:", {
+        message: err.message,
+        stack: err.stack,
+      });
+      res.status(500).json(errorBody("Upload failed", err));
     }
   },
 ];
