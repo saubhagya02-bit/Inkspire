@@ -1,11 +1,11 @@
 const {
   S3Client,
+  PutObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
 } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const multer = require("multer");
-const multerS3 = require("multer-s3");
 const path = require("path");
 const { v4: uuidv4 } = require("uuid");
 const logger = require("./logger");
@@ -44,44 +44,14 @@ const MAX_FILE_SIZE = {
   documents: 20 * 1024 * 1024, // 20 MB
 };
 
-// File filter
-
 const fileFilter = (req, file, cb) => {
   if (!ALLOWED_TYPES[file.mimetype]) {
     return cb(new Error(`File type not allowed: ${file.mimetype}`), false);
   }
-
-  const folder = ALLOWED_TYPES[file.mimetype];
-  const maxSize = MAX_FILE_SIZE[folder];
-
-  if (
-    req.headers["content-length"] &&
-    parseInt(req.headers["content-length"]) > maxSize
-  ) {
-    return cb(
-      new Error(
-        `File too large for type ${folder}. Max: ${maxSize / 1024 / 1024}MB`,
-      ),
-      false,
-    );
-  }
-
   cb(null, true);
 };
 
-// Multer-S3 storage
-const storage = multerS3({
-  s3: s3Client,
-  bucket: BUCKET,
-  contentType: multerS3.AUTO_CONTENT_TYPE,
-  key: (req, file, cb) => {
-    const userId = req.headers["x-user-id"] || "anonymous";
-    const folder = ALLOWED_TYPES[file.mimetype] || "misc";
-    const ext = path.extname(file.originalname).toLowerCase();
-    const key = `${folder}/${userId}/${uuidv4()}${ext}`;
-    cb(null, key);
-  },
-});
+const storage = multer.memoryStorage();
 
 const upload = multer({
   storage,
@@ -90,6 +60,42 @@ const upload = multer({
     fileSize: 100 * 1024 * 1024,
   },
 });
+
+const checkFileSize = (file) => {
+  const folder = ALLOWED_TYPES[file.mimetype] || "misc";
+  const maxSize = MAX_FILE_SIZE[folder] || MAX_FILE_SIZE.documents;
+  if (file.size > maxSize) {
+    throw new Error(
+      `File too large for type ${folder}. Max: ${maxSize / 1024 / 1024}MB`,
+    );
+  }
+};
+
+const uploadBufferToS3 = async (buffer, mimetype, originalname, userId) => {
+  const folder = ALLOWED_TYPES[mimetype] || "misc";
+  const ext = path.extname(originalname).toLowerCase();
+  const key = `${folder}/${userId || "anonymous"}/${uuidv4()}${ext}`;
+
+  try {
+    await s3Client.send(
+      new PutObjectCommand({
+        Bucket: BUCKET,
+        Key: key,
+        Body: buffer,
+        ContentType: mimetype,
+      }),
+    );
+  } catch (err) {
+    logger.error("S3 PutObjectCommand failed:", {
+      message: err.message,
+      code: err.Code || err.code,
+      bucket: BUCKET,
+    });
+    throw err;
+  }
+
+  return { key, location: getPublicUrl(key) };
+};
 
 // S3 helpers
 const deleteFromS3 = async (s3Key) => {
@@ -122,6 +128,8 @@ module.exports = {
   s3Client,
   BUCKET,
   ALLOWED_TYPES,
+  checkFileSize,
+  uploadBufferToS3,
   deleteFromS3,
   getPresignedUrl,
   getPublicUrl,
