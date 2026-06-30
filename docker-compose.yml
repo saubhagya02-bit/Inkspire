@@ -13,10 +13,7 @@ volumes:
 
 services:
 
-  # =========================
   # INFRASTRUCTURE
-  # =========================
-
   postgres:
     image: postgres:16-alpine
     container_name: blog-postgres
@@ -115,10 +112,7 @@ services:
     depends_on:
       - postgres
 
-  # =========================
   # MICROSERVICES
-  # =========================
-
   api-gateway:
     build:
       context: ./services/api-gateway
