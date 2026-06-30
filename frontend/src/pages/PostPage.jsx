@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import { postsApi } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import CommentsSection from "../components/comments/CommentsSection";
+import FollowButton from "../components/ui/FollowButton";
 import { PageLoader, Button, Badge } from "../components/ui";
 import { formatDistanceToNow, format } from "date-fns";
 import toast from "react-hot-toast";
@@ -17,9 +18,6 @@ export default function PostPage() {
   const [loading, setLoading] = useState(true);
   const [liked, setLiked] = useState(false);
   const [likeCount, setLikeCount] = useState(0);
-  const [liking, setLiking] = useState(false);
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     postsApi
@@ -27,8 +25,7 @@ export default function PostPage() {
       .then(({ data }) => {
         setPost(data);
         setLikeCount(data.like_count || 0);
-
-        setLiked(data.is_liked || false);
+        setLiked(Boolean(data.is_liked));
       })
       .catch(() => navigate("/"))
       .finally(() => setLoading(false));
@@ -39,36 +36,28 @@ export default function PostPage() {
       toast.error("Sign in to like");
       return;
     }
-    if (liking) return;
-    setLiking(true);
-
-    setLiked((prev) => !prev);
-    setLikeCount((prev) => (liked ? prev - 1 : prev + 1));
+    const wasLiked = liked;
+    setLiked(!wasLiked);
+    setLikeCount((c) => (wasLiked ? c - 1 : c + 1));
     try {
       const { data } = await postsApi.like(post.id);
       setLiked(data.liked);
       setLikeCount(data.likeCount);
     } catch {
-      setLiked((prev) => !prev);
-      setLikeCount((prev) => (liked ? prev + 1 : prev - 1));
-      toast.error("Failed to like post");
-    } finally {
-      setLiking(false);
+      setLiked(wasLiked);
+      setLikeCount((c) => (wasLiked ? c + 1 : c - 1));
+      toast.error("Failed");
     }
   };
 
   const handleDelete = async () => {
-    setDeleting(true);
-
+    if (!confirm("Delete this post permanently?")) return;
     try {
       await postsApi.delete(post.id);
-      toast.success("Post deleted successfully");
+      toast.success("Post deleted");
       navigate("/");
-    } catch (err) {
-      toast.error(err.response?.data?.error || "Failed to delete post");
-    } finally {
-      setDeleting(false);
-      setShowDeleteConfirm(false);
+    } catch {
+      toast.error("Failed to delete");
     }
   };
 
@@ -76,16 +65,10 @@ export default function PostPage() {
   if (!post) return null;
 
   const isAuthor = user?.id === post.author_id;
-  const isAdmin = user?.role === "admin" || user?.role === "editor";
-  const canEdit = isAuthor || isAdmin;
-
   const readingTime =
     post.reading_time ||
     Math.ceil((post.content?.split(" ").length || 0) / 200) ||
     1;
-
-  const authorName =
-    post.author_username || post.author_full_name || "Anonymous";
 
   return (
     <div
@@ -144,7 +127,7 @@ export default function PostPage() {
         </div>
       )}
 
-      {/* Status badge */}
+      {/* Status */}
       {post.status !== "published" && (
         <div style={{ marginBottom: 12 }}>
           <Badge color="orange">{post.status}</Badge>
@@ -165,7 +148,7 @@ export default function PostPage() {
         {post.title}
       </h1>
 
-      {/* Meta */}
+      {/* Author row */}
       <div
         style={{
           display: "flex",
@@ -178,18 +161,19 @@ export default function PostPage() {
           borderBottom: "1px solid var(--border-soft)",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {/* Avatar */}
           <div
             style={{
-              width: 36,
-              height: 36,
+              width: 42,
+              height: 42,
               borderRadius: "50%",
               background: "var(--ink-muted)",
               border: "1.5px solid var(--border)",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              fontSize: 14,
+              fontSize: 16,
               color: "var(--text-secondary)",
               overflow: "hidden",
               flexShrink: 0,
@@ -198,16 +182,30 @@ export default function PostPage() {
             {post.author_avatar ? (
               <img
                 src={post.author_avatar}
-                alt={authorName}
+                alt={post.author_username}
                 style={{ width: "100%", height: "100%", objectFit: "cover" }}
               />
             ) : (
-              authorName[0]?.toUpperCase() || "A"
+              post.author_username?.[0]?.toUpperCase() || "A"
             )}
           </div>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 400 }}>{authorName}</div>
-            <div style={{ fontSize: 12, color: "var(--text-tertiary)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 14, fontWeight: 400 }}>
+                {post.author_username || "Anonymous"}
+              </span>
+              {/* Follow button next to author name */}
+              {!isAuthor && post.author_id && (
+                <FollowButton userId={post.author_id} />
+              )}
+            </div>
+            <div
+              style={{
+                fontSize: 12,
+                color: "var(--text-tertiary)",
+                marginTop: 2,
+              }}
+            >
               {post.published_at
                 ? format(new Date(post.published_at), "MMM d, yyyy")
                 : "Draft"}
@@ -217,96 +215,17 @@ export default function PostPage() {
           </div>
         </div>
 
-        {canEdit && (
+        {/* Author actions */}
+        {isAuthor && (
           <div style={{ display: "flex", gap: 8 }}>
-            {isAuthor && (
-              <Link to={`/posts/${post.id}/edit`}>
-                <Button variant="secondary" size="sm">
-                  Edit
-                </Button>
-              </Link>
-            )}
-            <Button
-              variant="danger"
-              size="sm"
-              onClick={() => setShowDeleteConfirm(true)}
-            >
+            <Link to={`/posts/${post.id}/edit`}>
+              <Button variant="secondary" size="sm">
+                Edit
+              </Button>
+            </Link>
+            <Button variant="danger" size="sm" onClick={handleDelete}>
               Delete
             </Button>
-
-            {showDeleteConfirm && (
-              <div
-                style={{
-                  position: "fixed",
-                  inset: 0,
-                  background: "rgba(0,0,0,0.55)",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  zIndex: 9999,
-                  backdropFilter: "blur(4px)",
-                }}
-              >
-                <div
-                  style={{
-                    width: "100%",
-                    maxWidth: 420,
-                    background: "var(--ink-soft)",
-                    border: "1px solid var(--border)",
-                    borderRadius: "var(--radius-lg)",
-                    padding: "24px",
-                    boxShadow: "var(--shadow-lg)",
-                  }}
-                >
-                  <h3
-                    style={{
-                      margin: 0,
-                      marginBottom: 10,
-                      fontSize: 18,
-                      fontWeight: 600,
-                    }}
-                  >
-                    Delete Post
-                  </h3>
-
-                  <p
-                    style={{
-                      margin: 0,
-                      marginBottom: 20,
-                      color: "var(--text-secondary)",
-                      lineHeight: 1.6,
-                    }}
-                  >
-                    Are you sure you want to delete this post? This action
-                    cannot be undone.
-                  </p>
-
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "flex-end",
-                      gap: 10,
-                    }}
-                  >
-                    <Button
-                      variant="secondary"
-                      onClick={() => setShowDeleteConfirm(false)}
-                      disabled={deleting}
-                    >
-                      Cancel
-                    </Button>
-
-                    <Button
-                      variant="danger"
-                      onClick={handleDelete}
-                      disabled={deleting}
-                    >
-                      {deleting ? "Deleting..." : "Delete"}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         )}
       </div>
@@ -315,7 +234,7 @@ export default function PostPage() {
       {post.excerpt && (
         <p
           style={{
-            fontSize: "1.1rem",
+            fontSize: "1.05rem",
             color: "var(--text-secondary)",
             fontStyle: "italic",
             marginBottom: "2rem",
@@ -335,7 +254,7 @@ export default function PostPage() {
         </ReactMarkdown>
       </div>
 
-      {/* Like / stats bar */}
+      {/* Like bar */}
       <div
         style={{
           display: "flex",
@@ -350,7 +269,6 @@ export default function PostPage() {
       >
         <button
           onClick={handleLike}
-          disabled={liking}
           style={{
             display: "flex",
             alignItems: "center",
@@ -360,7 +278,8 @@ export default function PostPage() {
             fontSize: 14,
             transition: "color 0.2s",
             padding: 0,
-            cursor: liking ? "not-allowed" : "pointer",
+            border: "none",
+            cursor: "pointer",
           }}
         >
           <svg
@@ -377,11 +296,6 @@ export default function PostPage() {
             {likeCount} {likeCount === 1 ? "like" : "likes"}
           </span>
         </button>
-        <span style={{ color: "var(--text-tertiary)", fontSize: 13 }}>·</span>
-        <span style={{ color: "var(--text-tertiary)", fontSize: 13 }}>
-          {post.comment_count || 0}{" "}
-          {(post.comment_count || 0) === 1 ? "comment" : "comments"}
-        </span>
         <span style={{ color: "var(--text-tertiary)", fontSize: 13 }}>·</span>
         <span style={{ color: "var(--text-tertiary)", fontSize: 13 }}>
           {post.view_count || 0} views
