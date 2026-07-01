@@ -5,13 +5,14 @@ const { authenticateToken } = require("../middleware/auth");
 
 router.use(authenticateToken);
 
-// GET /users/me
+// GET /api/auth/users/me
 router.get("/me", async (req, res) => {
   const userId = req.user.id;
   try {
     const { rows } = await pool.query(
-      `SELECT id, email, username, full_name, avatar_url, role, is_verified,
-              two_factor_enabled, last_login_at, created_at
+      `SELECT id, email, username, full_name, avatar_url, role,
+              is_verified, two_factor_enabled, last_login_at,
+              follower_count, following_count, created_at
        FROM users WHERE id = $1`,
       [userId],
     );
@@ -23,7 +24,7 @@ router.get("/me", async (req, res) => {
   }
 });
 
-// PATCH /users/me
+// PATCH /api/auth/users/me
 router.patch("/me", async (req, res) => {
   const userId = req.user.id;
   const { fullName, avatarUrl, username } = req.body;
@@ -31,13 +32,14 @@ router.patch("/me", async (req, res) => {
   try {
     const { rows } = await pool.query(
       `UPDATE users SET
-         full_name   = COALESCE($1, full_name),
-         avatar_url  = COALESCE($2, avatar_url),
-         username    = COALESCE($3, username),
-         updated_at  = NOW()
+         full_name  = COALESCE($1, full_name),
+         avatar_url = COALESCE($2, avatar_url),
+         username   = COALESCE($3, username),
+         updated_at = NOW()
        WHERE id = $4
-       RETURNING id, email, username, full_name, avatar_url, role`,
-      [fullName, avatarUrl, username, userId],
+       RETURNING id, email, username, full_name, avatar_url, role,
+                 follower_count, following_count`,
+      [fullName || null, avatarUrl || null, username || null, userId],
     );
     if (!rows.length) return res.status(404).json({ error: "User not found" });
     res.json(rows[0]);
@@ -47,17 +49,18 @@ router.patch("/me", async (req, res) => {
   }
 });
 
-// GET /users/:id  (public profile)
+// GET /api/auth/users/:id
 router.get("/:id", async (req, res) => {
   try {
     const { rows } = await pool.query(
-      "SELECT id, username, full_name, avatar_url, created_at FROM users WHERE id = $1",
+      `SELECT id, username, full_name, avatar_url,
+              follower_count, following_count, created_at
+       FROM users WHERE id = $1`,
       [req.params.id],
     );
     if (!rows.length) return res.status(404).json({ error: "User not found" });
     res.json(rows[0]);
   } catch (err) {
-    logger.error("Get user error:", err);
     res.status(500).json({ error: "Failed to fetch user" });
   }
 });
