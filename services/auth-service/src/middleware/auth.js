@@ -2,7 +2,16 @@ const jwt = require("jsonwebtoken");
 const logger = require("../utils/logger");
 
 const authenticateToken = (req, res, next) => {
-  if (req.method === "OPTIONS") return next();
+  const gatewayUserId = req.headers["x-user-id"];
+  if (gatewayUserId) {
+    req.user = {
+      id: gatewayUserId,
+      role: req.headers["x-user-role"] || "user",
+      email: req.headers["x-user-email"] || "",
+      username: req.headers["x-user-username"] || "",
+    };
+    return next();
+  }
 
   const authHeader = req.headers["authorization"];
   const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
@@ -13,10 +22,12 @@ const authenticateToken = (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-    req.user = decoded;
-    req.headers["x-user-id"] = String(decoded.id);
-    req.headers["x-user-role"] = decoded.role;
+    req.user = {
+      id: decoded.id,
+      role: decoded.role || "user",
+      email: decoded.email || "",
+      username: decoded.username || "",
+    };
     next();
   } catch (err) {
     logger.warn("Token verification failed:", err.message);
