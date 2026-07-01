@@ -11,6 +11,7 @@ const { connectRedis } = require("./utils/redis");
 const { connectRabbitMQ } = require("./utils/rabbitmq");
 const authRoutes = require("./routes/auth");
 const userRoutes = require("./routes/users");
+const followRoutes = require("./routes/follow");
 const { errorHandler } = require("./middleware/errorHandler");
 
 require("./utils/passport");
@@ -35,11 +36,9 @@ app.get("/health", (req, res) =>
 
 app.use("/", authRoutes);
 app.use("/users", userRoutes);
-app.use(errorHandler);
+app.use("/users", followRoutes);
 
-app.listen(PORT, () => {
-  logger.info(`Auth Service running on port ${PORT}`);
-});
+app.use(errorHandler);
 
 const startConnections = async () => {
   let dbConnected = false;
@@ -56,7 +55,6 @@ const startConnections = async () => {
     }
   }
 
-  // Redis — required, retry forever
   let redisConnected = false;
   while (!redisConnected) {
     try {
@@ -68,7 +66,6 @@ const startConnections = async () => {
     }
   }
 
-  // RabbitMQ — optional for basic auth to work, keep retrying in background
   const connectMQWithRetry = async () => {
     while (true) {
       try {
@@ -84,6 +81,9 @@ const startConnections = async () => {
   connectMQWithRetry();
 };
 
-startConnections();
+app.listen(PORT, () => {
+  logger.info(`Auth Service running on port ${PORT}`);
+  startConnections();
+});
 
 module.exports = app;
