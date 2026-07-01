@@ -61,6 +61,7 @@ const upload = multer({
   },
 });
 
+// Enforce the real per-type size limit now that we have file.size in hand.
 const checkFileSize = (file) => {
   const folder = ALLOWED_TYPES[file.mimetype] || "misc";
   const maxSize = MAX_FILE_SIZE[folder] || MAX_FILE_SIZE.documents;
@@ -71,6 +72,7 @@ const checkFileSize = (file) => {
   }
 };
 
+// Upload a buffer to S3/MinIO and return { key, location }.
 const uploadBufferToS3 = async (buffer, mimetype, originalname, userId) => {
   const folder = ALLOWED_TYPES[mimetype] || "misc";
   const ext = path.extname(originalname).toLowerCase();
@@ -118,7 +120,7 @@ const getPresignedUrl = async (s3Key, expiresIn = 3600) => {
 const getPublicUrl = (s3Key) => {
   if (process.env.CDN_URL) return `${process.env.CDN_URL}/${s3Key}`;
   if (process.env.NODE_ENV !== "production") {
-    return `${process.env.S3_ENDPOINT || "http://localhost:9000"}/${BUCKET}/${s3Key}`;
+    return `${process.env.S3_PUBLIC_ENDPOINT || "http://localhost:9000"}/${BUCKET}/${s3Key}`;
   }
   return `https://${BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${s3Key}`;
 };
