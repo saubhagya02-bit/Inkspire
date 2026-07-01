@@ -193,6 +193,8 @@ export default function Layout() {
                       fontWeight: 500,
                       marginLeft: 4,
                       transition: "border-color 0.2s",
+                      overflow: "hidden",
+                      padding: 0,
                     }}
                     onMouseEnter={(e) =>
                       (e.currentTarget.style.borderColor = "var(--accent)")
@@ -201,7 +203,26 @@ export default function Layout() {
                       (e.currentTarget.style.borderColor = "var(--border)")
                     }
                   >
-                    {user.username?.[0]?.toUpperCase() || "U"}
+                    {user.avatar_url ? (
+                      <img
+                        src={user.avatar_url}
+                        alt={user.username}
+                        style={{
+                          width: "100%",
+                          height: "100%",
+                          objectFit: "cover",
+                        }}
+                        onError={(e) => {
+                          e.currentTarget.style.display = "none";
+                          e.currentTarget.nextSibling.style.display = "flex";
+                        }}
+                      />
+                    ) : null}
+                    <span
+                      style={{ display: user.avatar_url ? "none" : "flex" }}
+                    >
+                      {user.username?.[0]?.toUpperCase() || "U"}
+                    </span>
                   </button>
                   {menuOpen && (
                     <div
